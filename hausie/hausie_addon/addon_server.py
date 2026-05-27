@@ -1289,7 +1289,7 @@ def _apply_cloud_artifacts(
     return applied
 
 
-def _run_create_hausie() -> None:
+def _run_create_hausie(*, force_full: bool = False) -> None:
     log = get_logger("addon")
     with log.script("create_hausie"):
         settings = Settings()
@@ -1321,6 +1321,8 @@ def _run_create_hausie() -> None:
             "users": raw.get("users", []),
             "labels": labels,
         }
+        if force_full:
+            payload["force_full"] = True
         if device_id:
             payload["device_id"] = device_id
         cloud = CloudClient(
@@ -1410,7 +1412,7 @@ def _run_rebuild_hausie() -> None:
         _update_rebuild_state(state, plan=final_plan, version=current_version)
 
 
-def _run_create_base() -> None:
+def _run_create_base(*, force_full: bool = False) -> None:
     log = get_logger("addon")
     with log.script("create_base"):
         settings = Settings()
@@ -1435,22 +1437,22 @@ def _run_create_base() -> None:
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
         inventory = json.loads(Path(inv.inventory_file).read_text(encoding="utf-8"))
         labels = ha.fetch_labels()
-        force_full = False
+        computed_force_full = False
         try:
             states = ha.get_states()
-            force_full = not any(
+            computed_force_full = not any(
                 isinstance(state, dict) and state.get("entity_id") == "input_text.hausie_plan_text"
                 for state in states or []
             )
         except Exception:
-            force_full = False
+            computed_force_full = False
         device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
         payload = {
             "areas": raw.get("areas", []),
             "users": raw.get("users", []),
             "labels": labels,
             "inventory": inventory,
-            "force_full": force_full,
+            "force_full": bool(force_full or computed_force_full),
         }
         if device_id:
             payload["device_id"] = device_id
@@ -1493,8 +1495,8 @@ def _run_restart_hausie() -> None:
     with log.script("restart_hausie"):
         _cleanup_base_assets()
         _cleanup_hausie_assets()
-        _run_create_base()
-        _run_create_hausie()
+        _run_create_base(force_full=True)
+        _run_create_hausie(force_full=True)
         settings = Settings()
         state = load_device_state()
         _update_rebuild_state(
