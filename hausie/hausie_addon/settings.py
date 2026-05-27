@@ -1,24 +1,18 @@
-# hausie_app/settings.py
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+
 from .core.device_state import resolve_device_credentials
 
-# Carga .env (única fuente de configuración)
-root = Path(__file__).resolve().parents[1]
-env_file = root / ".env"
-ha_env = Path("/config/.env")
-if ha_env.exists():
-    load_dotenv(ha_env)
-if env_file.exists():
-    load_dotenv(env_file)
+HOME_ASSISTANT_CONFIG_DIR = "/homeassistant"
+
 
 def _read_secret_file(path: str | None) -> str | None:
     """Read a secret value from a file path if present."""
-    if not path: 
+    if not path:
         return None
     p = Path(path)
     return p.read_text(encoding="utf-8").strip() if p.exists() else None
+
 
 class Settings:
     def __init__(self):
@@ -37,7 +31,9 @@ class Settings:
         self.HA_UI_PASSWORD = os.getenv("HA_UI_PASSWORD")
         self.PLAYWRIGHT_STORAGE_STATE = os.getenv("PLAYWRIGHT_STORAGE_STATE")
         self.HAUSIE_CLOUD_URL = os.getenv("HAUSIE_CLOUD_URL", "").strip() or None
-        self.HAUSIE_CLOUD_TOKEN = os.getenv("HAUSIE_CLOUD_TOKEN") or _read_secret_file(os.getenv("HAUSIE_CLOUD_TOKEN_FILE"))
+        self.HAUSIE_CLOUD_TOKEN = os.getenv("HAUSIE_CLOUD_TOKEN") or _read_secret_file(
+            os.getenv("HAUSIE_CLOUD_TOKEN_FILE")
+        )
         device_id, token = resolve_device_credentials()
         if not self.HAUSIE_CLOUD_TOKEN and token:
             self.HAUSIE_CLOUD_TOKEN = token
@@ -48,7 +44,7 @@ class Settings:
         self.PI_PORT = int(os.getenv("PI_PORT", "22"))
         self.PI_SSH_KEY = os.getenv("PI_SSH_KEY")
         self.PI_SCP_LEGACY = os.getenv("PI_SCP_LEGACY", "").strip().lower() in {"1", "true", "yes"}
-        self.PI_HA_CONFIG_DIR = os.getenv("PI_HA_CONFIG_DIR", "/config")
+        self.PI_HA_CONFIG_DIR = os.getenv("PI_HA_CONFIG_DIR", HOME_ASSISTANT_CONFIG_DIR)
         for suffix in ("/helpers", "/scripts", "/groups", "/automations", "/dashboards"):
             if self.PI_HA_CONFIG_DIR.endswith(suffix):
                 self.PI_HA_CONFIG_DIR = self.PI_HA_CONFIG_DIR[: -len(suffix)]

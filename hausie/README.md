@@ -1,23 +1,35 @@
-Hausie HAOS Add-on
+# Hausie Add-on
 
-Folder contents:
- - config.yaml
- - Dockerfile
- - run.sh
- - hausie_addon/ (code copied from repo root)
- - requirements.txt
- - deploy.ps1 (sync + restart on Pi)
+Hausie connects a Home Assistant OS installation with Hausie Cloud and manages
+the generated Hausie dashboards, helpers, scripts, groups, covers, and support flows.
 
-Deploy to Pi (PowerShell):
-  $env:PI_HOST="192.168.1.108"
-  $env:PI_USER="root"
-  $env:PI_PORT="22"
-  $env:PI_SSH_KEY="C:\\Users\\mapet\\.ssh\\id_ed25519_hausie"
-  $env:HAUSIE_ADDON_REMOTE_DIR="/addons/hausie"
-  $env:HAUSIE_ADDON_SLUG="hausie"
-  .\\deploy.ps1
+## Features
 
-Notes:
- - HAOS custom add-ons live under /addons/<folder>.
- - After deploy, the script reloads add-ons and restarts the add-on.
- - Update config in HA UI: Settings -> Add-ons -> Hausie -> Configuration.
+- Connect a Home Assistant device to Hausie Cloud with a pairing code.
+- Create and maintain Hausie dashboards and generated YAML assets.
+- Keep a persistent device state inside the add-on data directory.
+- Enable Cloud-controlled remote support with SSH and Tailscale add-on integration.
+
+## Configuration
+
+Set these values in the add-on configuration UI:
+
+```yaml
+ha_token: ""
+hausie_cloud_url: ""
+pairing_code: ""
+tailscale_ip: ""
+```
+
+Optional logging and support settings are also exposed in the add-on schema.
+
+## Storage model
+
+- Add-on-owned files are stored in the add-on config directory.
+- Home Assistant configuration files are accessed through the mapped Home Assistant config directory.
+- Runtime state is persisted in `/data`.
+
+## Support
+
+Production users should install Hausie from this repository through the Home Assistant Add-on Store.
+Local SSH deploy workflows are intentionally kept out of this repository.

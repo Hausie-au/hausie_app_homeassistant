@@ -11,7 +11,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import yaml
 import websocket
-from dotenv import load_dotenv
 
 from .core.clients.ha_client import HAClient
 from .core.cloud_client import CloudClient
@@ -41,9 +40,6 @@ from .orchestration.new_device_dashboard import (
 from .settings import Settings
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-ENV_PATH = ROOT_DIR / ".env"
-if ENV_PATH.exists():
-    load_dotenv(ENV_PATH)
 
 
 def _load_addon_options() -> None:
@@ -55,6 +51,9 @@ def _load_addon_options() -> None:
         "log_to_stdout",
         "log_clear_on_start",
         "log_max_bytes",
+        "manage_tailscale",
+        "tailscale_addon_slug",
+        "tailscale_ip",
     }
     candidate_paths: list[Path] = [Path("/data/options.json")]
     addon_configs = Path("/addon_configs")
@@ -87,6 +86,9 @@ def _load_addon_options() -> None:
         "log_to_stdout": "HAUSIE_LOG_TO_STDOUT",
         "log_clear_on_start": "TEST_LOG_CLEAR_ON_START",
         "log_max_bytes": "HAUSIE_LOG_MAX_BYTES",
+        "manage_tailscale": "HAUSIE_SUPPORT_MANAGE_TAILSCALE",
+        "tailscale_addon_slug": "TAILSCALE_ADDON_SLUG",
+        "tailscale_ip": "HAUSIE_TAILSCALE_IP",
     }
     for option_key, env_key in mappings.items():
         if option_key in data:
@@ -166,109 +168,119 @@ def _update_rebuild_state(state: dict, *, plan: str | None, version: str | None)
     save_device_state(state)
 
 
-_REBUILD_PLAN_STEPS = {"create_base", "create_hausie"}
+_REBUILD_ALLOWED_STEPS = {"create_base", "create_hausie"}
 
 
-def _normalize_rebuild_steps(raw_steps: Any) -> list[str]:
-    if not isinstance(raw_steps, list):
+def _normalize_rebuild_steps(value) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
         return []
     steps: list[str] = []
-    for raw in raw_steps:
-        step = str(raw or "").strip()
-        if step in _REBUILD_PLAN_STEPS and step not in steps:
+    for item in value:
+        step = str(item or "").strip().lower()
+        if step in _REBUILD_ALLOWED_STEPS and step not in steps:
             steps.append(step)
     return steps
 
 
-def _resolve_local_rebuild_steps(
-    log: Any,
+def _resolve_local_rebuild_plan(
     *,
-    state: dict,
-    settings: Settings,
-    current_version: str,
-) -> tuple[list[str], str | None]:
-    last_plan = str(state.get("last_plan") or "").strip().lower()
-    last_version = str(state.get("last_addon_version") or "").strip()
-    current_plan = _resolve_subscription_plan(settings)
+    current_plan: str | None,
+    current_version: str | None,
+    last_plan: str,
+    last_version: str,
+) -> dict[str, object]:
     plan_changed = False
     version_changed = False
 
     if current_plan:
         plan_changed = current_plan.strip().lower() != last_plan if last_plan else True
     elif last_plan:
-        log.warn("Plan check unavailable; defaulting to create_base.")
         plan_changed = True
 
     if current_version:
         version_changed = current_version != last_version if last_version else True
     elif last_version:
-        log.warn("Add-on version unavailable; defaulting to create_base.")
         version_changed = True
 
+    steps = ["create_hausie"]
+    reason = "no_change"
     if plan_changed or version_changed:
-        log.start("Detected plan/add-on change; running create_base + create_hausie.")
-        return ["create_base", "create_hausie"], current_plan
+        steps = ["create_base", "create_hausie"]
+        if plan_changed and version_changed:
+            reason = "plan_and_addon_version_changed"
+        elif plan_changed:
+            reason = "plan_changed"
+        else:
+            reason = "addon_version_changed"
 
-    log.start("No plan/add-on changes; running create_hausie only.")
-    return ["create_hausie"], current_plan
+    return {
+        "execution_plan": steps,
+        "plan": current_plan,
+        "reason": reason,
+        "source": "local",
+    }
 
 
-def _resolve_remote_rebuild_steps(
-    log: Any,
+def _resolve_remote_rebuild_plan(
+    settings: Settings,
     *,
     state: dict,
-    settings: Settings,
-    current_version: str,
-) -> tuple[list[str], str | None]:
-    if not settings.HAUSIE_CLOUD_URL or not settings.HAUSIE_CLOUD_TOKEN:
-        return [], None
-
-    payload = {
-        "trigger": "rebuild_hausie",
-        "current_addon_version": current_version,
-        "last_plan": state.get("last_plan"),
-        "last_addon_version": state.get("last_addon_version"),
-    }
-    if settings.HAUSIE_DEVICE_ID:
-        payload["device_id"] = settings.HAUSIE_DEVICE_ID
-
+    current_plan: str | None,
+    current_version: str | None,
+) -> dict[str, object] | None:
+    if not settings.HAUSIE_CLOUD_URL:
+        return None
     try:
         cloud = CloudClient(
             base_url=settings.HAUSIE_CLOUD_URL,
             token=settings.HAUSIE_CLOUD_TOKEN,
             timeout_s=settings.HAUSIE_CLOUD_TIMEOUT,
         )
-        data = cloud.request_rebuild_plan(payload)
+        stored_device_id = ""
+        try:
+            stored_device_id, _stored_token = resolve_device_credentials()
+        except Exception:
+            stored_device_id = ""
+        device_id = (
+            os.getenv("HAUSIE_DEVICE_ID")
+            or os.getenv("HASSIO_ADDON_DEVICE_ID")
+            or stored_device_id
+            or state.get("device_id")
+            or ""
+        )
+        response = cloud.request_rebuild_plan(
+            {
+                "trigger": "rebuild_hausie",
+                "device_id": str(device_id or ""),
+                "current_addon_version": current_version or "",
+                "current_plan": current_plan or "",
+                "last_plan": str(state.get("last_plan") or ""),
+                "last_addon_version": str(state.get("last_addon_version") or ""),
+            }
+        )
     except Exception as exc:
-        log.warn(f"Remote rebuild plan unavailable; using local fallback: {exc}")
-        return [], None
+        get_logger("addon").warn(f"Remote rebuild plan unavailable; using local fallback: {exc}")
+        return None
 
-    if not isinstance(data, dict):
-        log.warn("Remote rebuild plan response invalid; using local fallback.")
-        return [], None
-
-    steps = _normalize_rebuild_steps(data.get("execution_plan") or data.get("steps"))
+    steps = _normalize_rebuild_steps(response.get("execution_plan"))
     if not steps:
-        log.warn("Remote rebuild plan missing execution_plan; using local fallback.")
-        return [], None
-
-    reason = str(data.get("reason") or "").strip()
-    if reason:
-        log.start(f"Using cloud rebuild plan ({reason}): {', '.join(steps)}.")
-    else:
-        log.start(f"Using cloud rebuild plan: {', '.join(steps)}.")
-
-    plan = data.get("tier") or data.get("plan")
-    plan_text = str(plan).strip() if plan else ""
-    return steps, (plan_text or None)
+        get_logger("addon").warn("Remote rebuild plan invalid; using local fallback.")
+        return None
+    return {
+        "execution_plan": steps,
+        "plan": response.get("plan") or current_plan,
+        "reason": response.get("reason") or "remote",
+        "source": "cloud",
+    }
 
 
-def _execute_rebuild_steps(steps: list[str]) -> None:
-    for step in steps:
-        if step == "create_base":
-            _run_create_base()
-        elif step == "create_hausie":
-            _run_create_hausie()
+def _execute_rebuild_steps(steps: list[str], log) -> None:
+    if "create_base" in steps:
+        _run_create_base()
+    if "create_hausie" in steps:
+        _run_create_hausie()
 
 
 def _resolve_mqtt_enabled() -> bool:
@@ -429,17 +441,22 @@ def _start_remote_support_manager() -> None:
         get_logger("support").warn("Remote support disabled: HA_TOKEN not set.")
         return
     toggle_entity = os.getenv("HAUSIE_SUPPORT_TOGGLE_ENTITY", "input_boolean.allow_remote_support")
-    auth_keys_path = os.getenv("HAUSIE_SUPPORT_AUTH_KEYS_PATH", "/config/ssh/authorized_keys")
+    auth_keys_path = os.getenv("HAUSIE_SUPPORT_AUTH_KEYS_PATH", "/homeassistant/ssh/authorized_keys")
     timeout_min = int(os.getenv("HAUSIE_SUPPORT_TIMEOUT_MINUTES", "15"))
     poll_s = int(os.getenv("HAUSIE_SUPPORT_POLL_SECONDS", "10"))
     public_keys = _load_public_keys()
     _device_id, token = resolve_device_credentials()
     base = os.getenv("HAUSIE_CLOUD_URL", "").strip().rstrip("/")
     support_keys_url = os.getenv("HAUSIE_SUPPORT_KEYS_URL", "").strip()
+    support_session_url = os.getenv("HAUSIE_SUPPORT_SESSION_URL", "").strip()
     if not support_keys_url and base:
         support_keys_url = f"{base}/api/device/support-keys"
+    if not support_session_url and base:
+        support_session_url = f"{base}/api/device/support-session"
     manage_ssh = os.getenv("HAUSIE_SUPPORT_MANAGE_SSH", "true").strip().lower() not in {"0", "false", "no"}
     ssh_slug = os.getenv("SSH_ADDON_SLUG", "a0d7b954_ssh").strip()
+    manage_tailscale = os.getenv("HAUSIE_SUPPORT_MANAGE_TAILSCALE", "true").strip().lower() not in {"0", "false", "no"}
+    tailscale_slug = os.getenv("TAILSCALE_ADDON_SLUG", "a0d7b954_tailscale").strip()
     _SUPPORT_MANAGER = RemoteSupportManager(
         ha_client=ha,
         toggle_entity=toggle_entity,
@@ -450,6 +467,9 @@ def _start_remote_support_manager() -> None:
         state_path=os.getenv("HAUSIE_SUPPORT_STATE_PATH", "/data/hausie_support_state.json"),
         manage_ssh_addon=manage_ssh,
         ssh_addon_slug=ssh_slug,
+        manage_tailscale_addon=manage_tailscale,
+        tailscale_addon_slug=tailscale_slug,
+        support_session_url=support_session_url,
         support_keys_url=support_keys_url,
         device_token=token,
         on_state_change=_send_heartbeat_now,
@@ -546,7 +566,7 @@ def _start_heartbeat() -> None:
 def _sync_local_config() -> None:
     if os.getenv("HAUSIE_SYNC_CONFIG_ON_START", "true").strip().lower() in {"0", "false", "no"}:
         return
-    config_path = os.getenv("PI_CONFIG_PATH", "/config/configuration.yaml").strip()
+    config_path = os.getenv("PI_CONFIG_PATH", "/homeassistant/configuration.yaml").strip()
     if not config_path:
         return
     try:
@@ -620,6 +640,73 @@ def _delete_ha_support_user(action: dict[str, Any]) -> None:
         get_logger("support").warn(f"HA UI support user not found: {username}")
 
 
+_HEARTBEAT_ALLOWED_ACTIONS = {
+    "cleanup_base",
+    "cleanup_base_assets",
+    "cleanup_hausie",
+    "cleanup_hausie_assets",
+    "create_base",
+    "create_hausie",
+    "create_ha_support_user",
+    "delete_ha_support_user",
+    "rebuild_hausie",
+    "refresh_plan",
+    "reset_pairing",
+    "restart_hausie",
+    "update_plan",
+}
+
+
+def _normalize_heartbeat_action(action: Any) -> dict[str, Any] | None:
+    if isinstance(action, str):
+        action_type = action.strip().lower()
+        if action_type not in _HEARTBEAT_ALLOWED_ACTIONS:
+            return None
+        return {"type": action_type, "payload": {}, "raw": action}
+
+    if not isinstance(action, dict):
+        return None
+
+    action_type = str(action.get("type") or action.get("action") or "").strip().lower()
+    if action_type not in _HEARTBEAT_ALLOWED_ACTIONS:
+        return None
+
+    try:
+        expires_at = int(action.get("expires_at") or 0)
+    except Exception:
+        expires_at = 0
+    if expires_at and expires_at < int(time.time()):
+        get_logger("heartbeat").warn(f"Expired heartbeat action skipped: {action_type}")
+        return None
+
+    payload = action.get("payload")
+    if isinstance(payload, dict):
+        merged = dict(payload)
+    else:
+        merged = {
+            str(key): value
+            for key, value in action.items()
+            if key
+            not in {
+                "action",
+                "expires_at",
+                "id",
+                "payload",
+                "requested_at",
+                "schema_version",
+                "source",
+                "type",
+            }
+        }
+    merged["type"] = action_type
+    return {
+        "id": action.get("id"),
+        "type": action_type,
+        "payload": merged,
+        "raw": action,
+    }
+
+
 def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None = None) -> None:
     if not actions:
         return
@@ -632,28 +719,18 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
         _HEARTBEAT_ACTION_RUNNING = True
     log = get_logger("heartbeat")
     try:
-        normalized: list[Any] = []
+        normalized: list[dict[str, Any]] = []
         for action in actions:
-            if isinstance(action, dict):
-                normalized.append(action)
-                continue
-            value = str(action).strip()
-            if value:
-                normalized.append(value)
+            normalized_action = _normalize_heartbeat_action(action)
+            if normalized_action:
+                normalized.append(normalized_action)
+            else:
+                log.warn(f"Unknown heartbeat action: {action}")
         if not normalized:
             return
-        action_names = [
-            str(action.get("type") or action.get("action") or "dict")
-            if isinstance(action, dict)
-            else str(action)
-            for action in normalized
-        ]
+        action_names = [str(action.get("type") or "unknown") for action in normalized]
         log.start(f"Heartbeat actions received: {', '.join(action_names)}")
-        lower_actions = [
-            str(action).strip().lower()
-            for action in normalized
-            if not isinstance(action, dict)
-        ]
+        lower_actions = [str(action.get("type") or "").strip().lower() for action in normalized]
         if "reset_pairing" in lower_actions:
             with log.script("reset_pairing"):
                 state_path = resolve_state_path()
@@ -678,45 +755,42 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
                 _run_create_hausie()
             return
         for action in normalized:
-            if isinstance(action, dict):
-                action_type = str(action.get("type") or action.get("action") or "").strip().lower()
-                if action_type == "create_ha_support_user":
-                    _create_ha_support_user(action)
-                    continue
-                if action_type == "delete_ha_support_user":
-                    _delete_ha_support_user(action)
-                    continue
-                log.warn(f"Unknown heartbeat action: {action_type or action}")
+            action_type = str(action.get("type") or "").strip().lower()
+            action_payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+            if action_type == "create_ha_support_user":
+                _create_ha_support_user(action_payload)
                 continue
-            action = str(action).strip().lower()
-            if action in {"cleanup_base", "cleanup_base_assets"}:
+            if action_type == "delete_ha_support_user":
+                _delete_ha_support_user(action_payload)
+                continue
+            if action_type in {"cleanup_base", "cleanup_base_assets"}:
                 with log.script("cleanup_base"):
                     _cleanup_base_assets()
                 continue
-            if action in {"cleanup_hausie", "cleanup_hausie_assets"}:
+            if action_type in {"cleanup_hausie", "cleanup_hausie_assets"}:
                 with log.script("cleanup_hausie"):
                     _cleanup_hausie_assets()
                 continue
-            if action == "create_base":
+            if action_type == "create_base":
                 _run_create_base()
                 continue
-            if action == "create_hausie":
+            if action_type == "create_hausie":
                 _run_create_hausie()
                 continue
-            if action == "rebuild_hausie":
+            if action_type == "rebuild_hausie":
                 _run_rebuild_hausie()
                 continue
-            if action == "restart_hausie":
+            if action_type == "restart_hausie":
                 _run_restart_hausie()
                 continue
-            log.warn(f"Unknown heartbeat action: {action}")
+            log.warn(f"Unknown heartbeat action: {action_type or action.get('raw')}")
     finally:
         with _HEARTBEAT_ACTION_LOCK:
             _HEARTBEAT_ACTION_RUNNING = False
 
 
 def _resolve_pi_dashboard_dir() -> str:
-    root = os.getenv("PI_HA_CONFIG_DIR", "/config")
+    root = os.getenv("PI_HA_CONFIG_DIR", "/homeassistant")
     for suffix in ("/helpers", "/scripts", "/groups", "/automations", "/dashboards"):
         if root.endswith(suffix):
             root = root[: -len(suffix)]
@@ -733,8 +807,8 @@ def _use_remote_sender() -> bool:
 
 def _sync_config_dashboard_to_pi(local_path: Path) -> None:
     if not _use_remote_sender():
-        # HAOS local mode: ensure dashboard is under /config/dashboards
-        target = Path(os.getenv("PI_DASHBOARD_DIR", "/config/dashboards")) / _CONFIG_DASHBOARD_FILENAME
+        # HAOS local mode: ensure dashboard is under /homeassistant/dashboards
+        target = Path(os.getenv("PI_DASHBOARD_DIR", "/homeassistant/dashboards")) / _CONFIG_DASHBOARD_FILENAME
         if local_path.resolve() != target.resolve():
             target.parent.mkdir(parents=True, exist_ok=True)
             if local_path.exists():
@@ -784,7 +858,7 @@ def _sync_config_dashboard_from_pi(local_path: Path) -> None:
 
 
 def _ha_config_root() -> Path:
-    return Path(os.getenv("PI_HA_CONFIG_DIR", "/config")).resolve()
+    return Path(os.getenv("PI_HA_CONFIG_DIR", "/homeassistant")).resolve()
 
 
 def _collect_registry_automation_ids(root: Path) -> set[str]:
@@ -862,7 +936,7 @@ def _cleanup_base_assets() -> dict[str, object]:
     _remove_file(root / "switches" / "hausie_switch_general.yaml", removed)
     _remove_file(root / "switches" / "switch_general.yaml", removed)
 
-    config_path = os.getenv("PI_CONFIG_PATH", "/config/configuration.yaml").strip()
+    config_path = os.getenv("PI_CONFIG_PATH", "/homeassistant/configuration.yaml").strip()
     if config_path:
         try:
             manager = ConfigManager(
@@ -931,7 +1005,7 @@ def _cleanup_hausie_assets() -> dict[str, object]:
     ):
         updated.append(str(config_dash))
 
-    config_path = os.getenv("PI_CONFIG_PATH", "/config/configuration.yaml").strip()
+    config_path = os.getenv("PI_CONFIG_PATH", "/homeassistant/configuration.yaml").strip()
     if config_path:
         try:
             manager = ConfigManager(
@@ -1310,23 +1384,30 @@ def _run_rebuild_hausie() -> None:
     with log.script("rebuild_hausie"):
         settings = Settings()
         state = load_device_state()
+        last_plan = str(state.get("last_plan") or "").strip().lower()
+        last_version = str(state.get("last_addon_version") or "").strip()
+        current_plan = _resolve_subscription_plan(settings)
         current_version = _resolve_addon_version()
-        rebuild_steps, current_plan = _resolve_remote_rebuild_steps(
-            log,
+        plan = _resolve_remote_rebuild_plan(
+            settings,
             state=state,
-            settings=settings,
+            current_plan=current_plan,
             current_version=current_version,
         )
-        if not rebuild_steps:
-            rebuild_steps, current_plan = _resolve_local_rebuild_steps(
-                log,
-                state=state,
-                settings=settings,
+        if plan is None:
+            plan = _resolve_local_rebuild_plan(
+                current_plan=current_plan,
                 current_version=current_version,
+                last_plan=last_plan,
+                last_version=last_version,
             )
-
-        _execute_rebuild_steps(rebuild_steps)
-        _update_rebuild_state(state, plan=current_plan, version=current_version)
+        steps = _normalize_rebuild_steps(plan.get("execution_plan"))
+        source = str(plan.get("source") or "unknown")
+        reason = str(plan.get("reason") or "unknown")
+        log.start(f"Using {source} rebuild plan ({reason}): {', '.join(steps)}.")
+        _execute_rebuild_steps(steps, log)
+        final_plan = str(plan.get("plan") or current_plan or "").strip() or None
+        _update_rebuild_state(state, plan=final_plan, version=current_version)
 
 
 def _run_create_base() -> None:

@@ -93,6 +93,7 @@ class RemoteSupportManager:
         toggle_entity: str,
         auth_keys_path: str,
         public_keys: list[str],
+        support_session_url: str | None = None,
         support_keys_url: str | None = None,
         device_token: str | None = None,
         timeout_s: int = 900,
@@ -100,6 +101,8 @@ class RemoteSupportManager:
         state_path: str = "/data/hausie_support_state.json",
         manage_ssh_addon: bool = True,
         ssh_addon_slug: str | None = None,
+        manage_tailscale_addon: bool = True,
+        tailscale_addon_slug: str | None = None,
         on_state_change: Callable[[bool], None] | None = None,
     ) -> None:
         self._log = get_logger("support")
@@ -107,6 +110,7 @@ class RemoteSupportManager:
         self._toggle_entity = toggle_entity
         self._auth_keys_path = Path(auth_keys_path)
         self._public_keys = public_keys
+        self._support_session_url = (support_session_url or "").strip()
         self._support_keys_url = (support_keys_url or "").strip()
         self._device_token = (device_token or "").strip()
         self._timeout_s = max(60, int(timeout_s or 900))
@@ -114,6 +118,8 @@ class RemoteSupportManager:
         self._state_path = Path(state_path)
         self._manage_ssh = bool(manage_ssh_addon)
         self._ssh_slug = (ssh_addon_slug or "").strip() or None
+        self._manage_tailscale = bool(manage_tailscale_addon)
+        self._tailscale_slug = (tailscale_addon_slug or "").strip() or None
         self._on_state_change = on_state_change
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -275,6 +281,29 @@ class RemoteSupportManager:
             self._log.warn(f"Failed to sync SSH add-on authorized_keys: {exc}")
 
     def _resolve_public_keys(self) -> list[str]:
+        session = self._resolve_support_session(support_requested=True)
+        if session:
+            if not bool(session.get("active", False)):
+                reason = str(session.get("reason") or "inactive")
+                self._log.warn(f"Cloud support session denied: {reason}")
+                return []
+            keys = [
+                str(key).strip()
+                for key in session.get("public_keys") or []
+                if str(key).strip()
+            ]
+            if keys:
+                self._public_keys = keys
+                try:
+                    expires_at = int(session.get("expires_at") or 0)
+                    if expires_at:
+                        self._timeout_s = max(60, expires_at - int(time.time()))
+                    elif session.get("timeout_s"):
+                        self._timeout_s = max(60, int(session.get("timeout_s")))
+                except Exception:
+                    pass
+                return keys
+
         if self._support_keys_url and self._device_token:
             try:
                 resp = requests.get(
@@ -295,6 +324,25 @@ class RemoteSupportManager:
                 return []
         return self._public_keys
 
+    def _resolve_support_session(self, *, support_requested: bool) -> dict[str, Any] | None:
+        if not self._support_session_url or not self._device_token:
+            return None
+        try:
+            resp = requests.get(
+                self._support_session_url,
+                headers={"Authorization": f"Bearer {self._device_token}"},
+                params={"support_requested": "true" if support_requested else "false"},
+                timeout=10,
+            )
+            if resp.status_code // 100 != 2:
+                raise RuntimeError(f"{resp.status_code}: {resp.text}")
+            data = resp.json()
+            session = data.get("support_session") if isinstance(data, dict) else None
+            return session if isinstance(session, dict) else None
+        except Exception as exc:
+            self._log.warn(f"Failed to fetch cloud support session; using fallback: {exc}")
+            return None
+
     def _set_ssh_addon(self, enabled: bool) -> None:
         if not self._manage_ssh:
             return
@@ -306,6 +354,31 @@ class RemoteSupportManager:
             self._ha.call_service("hassio", service, {"addon": self._ssh_slug})
         except Exception as exc:
             self._log.warn(f"Failed to toggle SSH add-on ({self._ssh_slug}): {exc}")
+
+    def _set_tailscale_addon(self, enabled: bool) -> None:
+        if not self._manage_tailscale:
+            return
+        if not self._tailscale_slug:
+            self._log.warn("Tailscale add-on slug not configured.")
+            return
+        service = "addon_start" if enabled else "addon_stop"
+        try:
+            self._ha.call_service("hassio", service, {"addon": self._tailscale_slug})
+            action = "started" if enabled else "stopped"
+            self._log.ok(f"Tailscale add-on {action}.")
+        except Exception as exc:
+            self._log.warn(f"Failed to toggle Tailscale add-on ({self._tailscale_slug}): {exc}")
+
+    def _delete_temp_ha_user(self) -> None:
+        username = os.getenv("HAUSIE_SUPPORT_HA_USERNAME", "hausie_support_temp").strip()
+        if not username:
+            return
+        try:
+            deleted = self._ha.delete_auth_user_by_username(username)
+            if deleted:
+                self._log.ok(f"HA UI support user removed: {username}")
+        except Exception as exc:
+            self._log.warn(f"Failed to remove HA UI support user {username}: {exc}")
 
     def _enable(self) -> None:
         if self._state.active:
@@ -319,6 +392,7 @@ class RemoteSupportManager:
             self._notify_state_change()
             return
         self._set_ssh_addon(True)
+        self._set_tailscale_addon(True)
         self._state.active = True
         self._state.started_at = time.time()
         self._state.timeout_s = self._timeout_s
@@ -330,8 +404,10 @@ class RemoteSupportManager:
         if not self._state.active:
             return
         self._log.start("Disabling remote support.")
+        self._delete_temp_ha_user()
         self._apply_keys(False)
         self._set_ssh_addon(False)
+        self._set_tailscale_addon(False)
         self._state.active = False
         self._state.started_at = None
         self._save_state()
@@ -352,6 +428,16 @@ class RemoteSupportManager:
             self._enable()
         elif not enabled and self._state.active:
             self._disable()
+
+        if self._state.active:
+            session = self._resolve_support_session(support_requested=True)
+            if session is not None and not bool(session.get("active", False)):
+                reason = str(session.get("reason") or "inactive")
+                self._log.warn(f"Cloud support session closed ({reason}); disabling.")
+                self._disable()
+                self._set_toggle(False)
+                self._last_toggle = False
+                return
 
         if self._state.active and self._state.expired():
             self._log.warn("Remote support timed out; disabling.")

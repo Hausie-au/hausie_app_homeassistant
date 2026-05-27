@@ -12,7 +12,7 @@ def _resolve_config_dashboard_path() -> Path:
     candidates = [
         ROOT_DIR / "hausie" / "homeassistant" / "dashboards" / "hausie_configuration_dashboard.yaml",
         ROOT_DIR / "homeassistant" / "dashboards" / "hausie_configuration_dashboard.yaml",
-        Path("/config/dashboards/hausie_configuration_dashboard.yaml"),
+        Path("/homeassistant/dashboards/hausie_configuration_dashboard.yaml"),
     ]
     for path in candidates:
         if path.exists():

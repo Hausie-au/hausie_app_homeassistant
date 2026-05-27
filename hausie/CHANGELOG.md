@@ -1,9 +1,42 @@
 # Changelog
 
+## 0.2.14
+
+- Start the Tailscale add-on when remote support opens.
+- Stop the Tailscale add-on when remote support closes or expires.
+- Keep Tailscale management configurable with `HAUSIE_SUPPORT_MANAGE_TAILSCALE`.
+
+## 0.2.13
+
+- Remove the temporary Home Assistant support user automatically when remote support closes.
+- Disable local remote support when Cloud closes or expires the active support session.
+- Queue support-user removal from Cloud when an admin deactivates support.
+
+## 0.2.12
+
+- Require an active Cloud remote-support session before opening remote support.
+- Add persisted Cloud remote-support session support for admin authorization/audit.
+
+## 0.2.11
+
+- Add Cloud-controlled remote support session policy.
+- Fetch support public keys, timeout, and expiry from `/api/device/support-session`.
+- Keep local support key fallback if Cloud session policy is unavailable.
+
+## 0.2.10
+
+- Normalize heartbeat actions from Cloud with a schema-versioned payload contract.
+- Validate heartbeat actions against an add-on allowlist before execution.
+- Ignore expired heartbeat actions instead of executing stale commands.
+
+## 0.2.9
+
+- Delegate `rebuild_hausie` execution-plan decisions to Hausie Cloud when available.
+- Preserve local rebuild decision fallback if Cloud is unavailable or returns an invalid plan.
+
 ## 0.2.8
 
 - Send heartbeat frequently while remote support is open.
 - Support temporary Home Assistant UI support sessions.
 - Sync support public keys into the SSH add-on options.
 - Report Tailscale IP and IP source in heartbeat.
-

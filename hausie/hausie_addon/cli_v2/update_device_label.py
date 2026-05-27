@@ -1,9 +1,6 @@
 import argparse
 import os
 import sys
-from pathlib import Path
-
-from dotenv import load_dotenv
 
 from ..core.flow_logger import get_logger
 from ..orchestration.device_label_updater import DeviceLabelUpdater
@@ -40,10 +37,6 @@ def _resolve_base_url(arg_value: str | None) -> str:
 
 def main() -> None:
     log = get_logger("new_device")
-    root = Path(__file__).resolve().parents[1]
-    env_file = root / ".env"
-    if env_file.exists():
-        load_dotenv(env_file)
     args = _parse_args()
     base_url = _resolve_base_url(args.base_url)
     username = args.username or os.getenv("HA_UI_USERNAME", "")

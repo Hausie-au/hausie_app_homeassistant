@@ -45,6 +45,18 @@ class CloudClient:
             raise RuntimeError(f"Cloud rebuild-plan failed {resp.status_code}: {resp.text}")
         return resp.json() if resp.content else {}
 
+    def request_support_session(self, *, support_requested: bool) -> dict:
+        url = f"{self.base_url}/api/device/support-session"
+        resp = requests.get(
+            url,
+            headers=self.headers,
+            params={"support_requested": "true" if support_requested else "false"},
+            timeout=self.timeout_s,
+        )
+        if resp.status_code // 100 != 2:
+            raise RuntimeError(f"Cloud support-session failed {resp.status_code}: {resp.text}")
+        return resp.json() if resp.content else {}
+
     def register_device(self, payload: dict) -> dict:
         url = f"{self.base_url}/api/device/register"
         body = dict(payload or {})

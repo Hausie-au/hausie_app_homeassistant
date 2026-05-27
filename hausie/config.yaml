@@ -1,6 +1,6 @@
 name: Hausie Add-on
 slug: hausie
-version: "0.2.8"
+version: "0.2.14"
 description: Hausie add-on for Home Assistant OS
 arch:
   - aarch64
@@ -20,8 +20,10 @@ panel_admin: true
 ports:
   8000/tcp: 8000
 map:
-  - config:rw
-  - addon_config:rw
+  - type: addon_config
+    read_only: false
+  - type: homeassistant_config
+    read_only: false
 options:
   ha_token: ""
   hausie_cloud_url: ""
@@ -31,6 +33,8 @@ options:
   log_to_stdout: true
   log_clear_on_start: false
   log_max_bytes: 1048576
+  manage_tailscale: true
+  tailscale_addon_slug: "a0d7b954_tailscale"
 schema:
   ha_token: password?
   hausie_cloud_url: str?
@@ -40,3 +44,5 @@ schema:
   log_to_stdout: bool?
   log_clear_on_start: bool?
   log_max_bytes: int?
+  manage_tailscale: bool?
+  tailscale_addon_slug: str?

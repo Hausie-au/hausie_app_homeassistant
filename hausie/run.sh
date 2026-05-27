@@ -2,17 +2,10 @@
 set -e
 
 OPTIONS_FILE="/data/options.json"
-ENV_FILE="/config/.env"
 
 echo "=============================="
 echo "HAUSIE APP HAS STARTED"
 echo "=============================="
-
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  . "$ENV_FILE"
-  set +a
-fi
 
 if [ -f "$OPTIONS_FILE" ]; then
   eval "$(python - <<'PY'
@@ -47,6 +40,10 @@ fi
 if [ -z "${HAUSIE_LOCAL_MODE:-}" ]; then
   export HAUSIE_LOCAL_MODE="true"
 fi
+
+export PI_HA_CONFIG_DIR="${PI_HA_CONFIG_DIR:-/homeassistant}"
+export PI_DASHBOARD_DIR="${PI_DASHBOARD_DIR:-/homeassistant/dashboards}"
+export PI_CONFIG_PATH="${PI_CONFIG_PATH:-/homeassistant/configuration.yaml}"
 
 export HAUSIE_LOG_TO_STDOUT="true"
 export TEST_LOG_CLEAR_ON_START="true"

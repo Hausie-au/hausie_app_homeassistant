@@ -437,15 +437,6 @@ class HausieOrchestrator:
         )
         self.registry.add_script("general", "hausie_upgrade_popup", "Hausie Upgrade Popup", [])
 
-    def _sync_env_file(self) -> None:
-        if not self.yaml_manager.pi_sender or not self.pi_repo_root:
-            return
-        local_env = (ROOT_DIR / ".env").resolve()
-        if not local_env.exists():
-            return
-        remote_env = f"{self.pi_repo_root.rstrip('/')}/.env"
-        self.yaml_manager.pi_sender.send_file(local_env, remote_env)
-
     def _ensure_fixed_automations(self) -> None:
         """Ensure core automations for fixed flows exist."""
         automation_id = "new_device_created"

@@ -1,11 +1,11 @@
 # Hausie Add-ons Repository
 
-This folder is the source template for the public Home Assistant add-on repository.
+This repository is the source of truth for the public Home Assistant add-on.
 
-Target repository:
+Public repository:
 
 ```text
-https://github.com/Haussie-au/hausie-addons
+https://github.com/Haussie-au/hausie_app_homeassistant
 ```
 
 Expected published structure:
@@ -38,18 +38,17 @@ Hausie Add-on
 
 ## Release Flow
 
-1. Update the add-on code in `hausie_haos_addon/`.
-2. Bump `hausie_haos_addon/config.yaml` version.
-3. Copy `hausie_haos_addon/` into this repository as `hausie/`.
-4. Commit and push to `Haussie-au/hausie-addons`.
-5. Home Assistant will detect the new version from `hausie/config.yaml`.
+1. Update the add-on code directly in `hausie/`.
+2. Bump `hausie/config.yaml` version.
+3. Commit and push to `Haussie-au/hausie_app_homeassistant`.
+4. Home Assistant users get the update from `hausie/config.yaml`.
 
 ## Development vs Production
 
-Development:
+Local testing:
 
 ```text
-deploy.ps1 over SSH to one Pi
+Use the internal deploy tooling from the sibling `hausie` repository
 ```
 
 Production:
@@ -58,4 +57,4 @@ Production:
 Home Assistant add-on repository
 ```
 
-Do not deploy customer updates by SSH once devices are in the field.
+This repository stays public-ready. SSH deploy scripts and local-only tooling live in the internal `hausie` repository.
