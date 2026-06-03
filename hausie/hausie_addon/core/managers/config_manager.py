@@ -169,6 +169,8 @@ class ConfigManager:
             doc["group"] = _TaggedValue("!include_dir_merge_named", "groups")
         if not isinstance(doc.get("cover"), _TaggedValue) or doc["cover"].tag != "!include_dir_merge_list" or doc["cover"].value != "covers":
             doc["cover"] = _TaggedValue("!include_dir_merge_list", "covers")
+        if "cloud" not in doc or doc.get("cloud") is None:
+            doc["cloud"] = {}
         if "recorder" not in doc or doc.get("recorder") is None:
             doc["recorder"] = {}
         if "history" not in doc or doc.get("history") is None:
