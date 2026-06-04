@@ -1332,6 +1332,168 @@ def _apply_cloud_artifacts(
     return applied
 
 
+_VOICE_ASSISTANTS = ("cloud.alexa", "cloud.google_assistant")
+_VOICE_STATE_KEY = "managed_voice_entities"
+
+
+def _normalize_voice_entities(value: Any) -> list[str]:
+    """Normalize voice entity ids received from cloud."""
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        entity_id = str(item or "").strip()
+        if not entity_id or "." not in entity_id or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        normalized.append(entity_id)
+    return normalized
+
+
+def _sync_voice_exposure(ha: HAClient, response: dict[str, Any] | None, log) -> None:
+    """Sync Alexa/Google Assistant exposure for the entities shown in Hausie."""
+    voice = response.get("voice") if isinstance(response, dict) else None
+    if not isinstance(voice, dict):
+        log.info("Voice exposure sync skipped: cloud response missing voice payload.")
+        return
+
+    assistants = [
+        str(item or "").strip()
+        for item in (voice.get("assistants") or list(_VOICE_ASSISTANTS))
+        if str(item or "").strip()
+    ]
+    desired_entities = _normalize_voice_entities(voice.get("entities") or [])
+    voice_enabled = bool(voice.get("enabled", True))
+    if not assistants:
+        log.info("Voice exposure sync skipped: no assistants configured in payload.")
+        return
+
+    try:
+        config = ha.get_config()
+    except Exception as exc:
+        log.warn(f"Voice exposure sync skipped: failed to read HA config ({exc}).")
+        return
+
+    components = {
+        str(item or "").strip().lower()
+        for item in (config.get("components") or [])
+        if str(item or "").strip()
+    }
+    if "cloud" not in components:
+        log.info("Voice exposure sync skipped: Home Assistant Cloud is not loaded.")
+        return
+
+    available_entities: set[str] = set()
+    try:
+        available_entities = {
+            str(item.get("entity_id") or "").strip()
+            for item in (ha.get_states() or [])
+            if isinstance(item, dict) and str(item.get("entity_id") or "").strip()
+        }
+    except Exception as exc:
+        log.warn(f"Voice exposure sync continuing without state filtering: {exc}")
+
+    missing_entities = [
+        entity_id for entity_id in desired_entities
+        if available_entities and entity_id not in available_entities
+    ]
+    desired_entities = [
+        entity_id for entity_id in desired_entities
+        if not available_entities or entity_id in available_entities
+    ]
+    if missing_entities:
+        log.warn(
+            "Voice exposure skipped missing entities: "
+            + ", ".join(sorted(missing_entities)[:10])
+            + (" ..." if len(missing_entities) > 10 else "")
+        )
+
+    try:
+        ha.list_exposed_entities()
+    except Exception as exc:
+        log.warn(f"Voice exposure sync skipped: expose_entity API unavailable ({exc}).")
+        return
+
+    state = load_device_state()
+    managed = state.get(_VOICE_STATE_KEY)
+    if not isinstance(managed, dict):
+        managed = {}
+
+    updated_managed: dict[str, list[str]] = {}
+    total_exposed = 0
+    total_unexposed = 0
+    for assistant in assistants:
+        previous_entities = {
+            str(item or "").strip()
+            for item in (managed.get(assistant) or [])
+            if str(item or "").strip()
+        }
+        desired_set = set(desired_entities) if voice_enabled else set()
+        to_unexpose = sorted(previous_entities - desired_set)
+        if to_unexpose:
+            try:
+                ha.set_entity_exposure(
+                    assistants=[assistant],
+                    entity_ids=to_unexpose,
+                    should_expose=False,
+                )
+                total_unexposed += len(to_unexpose)
+            except Exception as exc:
+                log.warn(f"Voice exposure unexpose failed for {assistant}: {exc}")
+
+        if desired_entities and voice_enabled:
+            try:
+                ha.set_entity_exposure(
+                    assistants=[assistant],
+                    entity_ids=desired_entities,
+                    should_expose=True,
+                )
+                total_exposed += len(desired_entities)
+            except Exception as exc:
+                log.warn(f"Voice exposure update failed for {assistant}: {exc}")
+                updated_managed[assistant] = sorted(previous_entities & desired_set)
+                continue
+
+        updated_managed[assistant] = sorted(desired_set)
+
+    state[_VOICE_STATE_KEY] = updated_managed
+    state["voice_sync_assistants"] = assistants
+    state["voice_sync_desired_entities"] = desired_entities if voice_enabled else []
+    state["voice_sync_enabled"] = voice_enabled
+    state["voice_entities_updated_at"] = int(time.time())
+    save_device_state(state)
+    if voice_enabled:
+        log.ok(
+            f"Voice exposure synced: {len(desired_entities)} desired, "
+            f"{total_exposed} expose ops, {total_unexposed} unexpose ops."
+        )
+    else:
+        log.ok(f"Voice exposure disabled by plan: {total_unexposed} unexpose ops.")
+
+
+def _resync_voice_exposure_from_state(log) -> None:
+    """Re-apply the last known voice exposure state on add-on startup."""
+    state = load_device_state()
+    desired_entities = _normalize_voice_entities(state.get("voice_sync_desired_entities") or [])
+    assistants = [
+        str(item or "").strip()
+        for item in (state.get("voice_sync_assistants") or list(_VOICE_ASSISTANTS))
+        if str(item or "").strip()
+    ]
+    if not desired_entities or not assistants:
+        return
+    ha = _resolve_ha_client()
+    if not ha:
+        log.warn("Voice exposure startup sync skipped: HA client unavailable.")
+        return
+    _sync_voice_exposure(
+        ha,
+        {"voice": {"assistants": assistants, "entities": desired_entities}},
+        log,
+    )
+
+
 def _run_create_hausie(*, force_full: bool = False) -> None:
     log = get_logger("addon")
     with log.script("create_hausie"):
@@ -1418,6 +1580,7 @@ def _run_create_hausie(*, force_full: bool = False) -> None:
         else:
             log.warn("UI update skipped: cloud response missing 'ui' payload.")
         _reload_services(ha, log)
+        _sync_voice_exposure(ha, response if isinstance(response, dict) else None, log)
         _apply_plan_badge(ha, response.get("plan_badge") if isinstance(response, dict) else None)
         enabled = _turn_on_user_helpers(ha)
         if enabled:
@@ -2496,6 +2659,10 @@ def run(host: str = "0.0.0.0", port: int = 8000) -> None:
     _start_remote_support_manager()
     _start_heartbeat()
     _sync_local_config()
+    try:
+        _resync_voice_exposure_from_state(log)
+    except Exception as exc:
+        log.warn(f"Voice exposure startup sync failed: {exc}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

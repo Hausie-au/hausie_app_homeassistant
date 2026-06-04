@@ -371,6 +371,36 @@ class HAClient:
             ws.close()
         return self._normalize_labels(labels)
 
+    def list_exposed_entities(self) -> dict[str, dict[str, bool]]:
+        """Return explicit voice-assistant exposure preferences per entity."""
+        result = self._auth_ws_call("homeassistant/expose_entity/list") or {}
+        exposed = result.get("exposed_entities") if isinstance(result, dict) else {}
+        return exposed if isinstance(exposed, dict) else {}
+
+    def set_entity_exposure(
+        self,
+        *,
+        assistants: list[str],
+        entity_ids: list[str],
+        should_expose: bool,
+    ) -> dict:
+        """Expose or unexpose entities for the given assistants."""
+        normalized_assistants = [str(item or "").strip() for item in assistants if str(item or "").strip()]
+        normalized_entity_ids = [str(item or "").strip() for item in entity_ids if str(item or "").strip()]
+        if not normalized_assistants:
+            raise ValueError("assistants is required.")
+        if not normalized_entity_ids:
+            return {}
+        result = self._auth_ws_call(
+            "homeassistant/expose_entity",
+            {
+                "assistants": normalized_assistants,
+                "entity_ids": normalized_entity_ids,
+                "should_expose": bool(should_expose),
+            },
+        )
+        return result if isinstance(result, dict) else {}
+
     def upsert_raw_users(self, users: list[dict]) -> None:
         """Update raw snapshot with the latest users list."""
         try:
