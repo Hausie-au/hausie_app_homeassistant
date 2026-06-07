@@ -15,7 +15,6 @@ import websocket
 from .core.clients.ha_client import HAClient
 from .core.cloud_client import CloudClient
 from .core.flow_logger import get_logger
-from .core.inventory.process_inventory import InventoryProcessor
 from .core.io.pi_file_sender import PiFileSender
 from .core.managers.notification_manager import NotificationManager
 from .core.mqtt_listener import MQTTNotificationListener
@@ -1503,9 +1502,7 @@ def _run_create_hausie(*, force_full: bool = False) -> None:
         if not settings.HAUSIE_CLOUD_URL:
             raise RuntimeError("HAUSIE_CLOUD_URL es requerido para generar assets en cloud.")
         ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
-        inv = InventoryProcessor()
         sender = None
-        inv = InventoryProcessor()
         if settings.PI_HOST and settings.PI_USER:
             sender = PiFileSender(
                 host=settings.PI_HOST,
@@ -1517,14 +1514,14 @@ def _run_create_hausie(*, force_full: bool = False) -> None:
         else:
             log.warn("PI_HOST/PI_USER no definidos; usando modo local.")
         ha.fetch_all(include_users=True)
-        inv.process()
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
-        inventory = json.loads(Path(inv.inventory_file).read_text(encoding="utf-8"))
         labels = ha.fetch_labels()
         device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
         payload = {
-            "inventory": inventory,
             "areas": raw.get("areas", []),
+            "devices": raw.get("devices", []),
+            "entities": raw.get("entities", []),
+            "services": raw.get("services", []),
             "users": raw.get("users", []),
             "labels": labels,
         }
@@ -1644,10 +1641,7 @@ def _run_create_base(*, force_full: bool = False) -> None:
             log.warn("PI_HOST/PI_USER no definidos; usando modo local.")
         log.start("Fetching Home Assistant snapshot.")
         ha.fetch_all(include_users=True)
-        inv = InventoryProcessor()
-        inv.process()
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
-        inventory = json.loads(Path(inv.inventory_file).read_text(encoding="utf-8"))
         labels = ha.fetch_labels()
         computed_force_full = False
         try:
@@ -1661,9 +1655,11 @@ def _run_create_base(*, force_full: bool = False) -> None:
         device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
         payload = {
             "areas": raw.get("areas", []),
+            "devices": raw.get("devices", []),
+            "entities": raw.get("entities", []),
+            "services": raw.get("services", []),
             "users": raw.get("users", []),
             "labels": labels,
-            "inventory": inventory,
             "force_full": bool(force_full or computed_force_full),
         }
         if device_id:

@@ -9,7 +9,6 @@ from ..settings import Settings
 from ..core.clients.ha_client import HAClient
 from ..core.cloud_client import CloudClient
 from ..core.flow_logger import get_logger
-from ..core.inventory.process_inventory import InventoryProcessor
 from ..core.io.pi_file_sender import PiFileSender
 from ..orchestration.dashboard_updater import DashboardUpdater
 
@@ -118,7 +117,6 @@ def main() -> None:
             ha_url_rest=s.HA_REST_URL,
             token=s.HA_TOKEN,
         )
-        inv = InventoryProcessor()
 
         sender = None
         if s.PI_HOST and s.PI_USER:
@@ -134,15 +132,15 @@ def main() -> None:
 
         log.start("Fetching Home Assistant snapshot.")
         ha.fetch_all(include_users=True)
-        inv.process()
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
-        inventory = json.loads(Path(inv.inventory_file).read_text(encoding="utf-8"))
         labels = ha.fetch_labels()
 
         device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or s.HAUSIE_DEVICE_ID
         payload = {
-            "inventory": inventory,
             "areas": raw.get("areas", []),
+            "devices": raw.get("devices", []),
+            "entities": raw.get("entities", []),
+            "services": raw.get("services", []),
             "users": raw.get("users", []),
             "labels": labels,
         }

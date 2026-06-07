@@ -6,9 +6,14 @@ the generated Hausie dashboards, helpers, scripts, groups, covers, and support f
 ## Features
 
 - Connect a Home Assistant device to Hausie Cloud with a pairing code.
-- Create and maintain Hausie dashboards and generated YAML assets.
+- Apply dashboards and generated YAML assets produced by Hausie Cloud.
 - Keep a persistent device state inside the add-on data directory.
 - Enable Cloud-controlled remote support with SSH and Tailscale add-on integration.
+
+## Architecture
+
+- Hausie Cloud owns generation logic for dashboards, helpers, scripts, groups, covers, and automations.
+- The add-on acts as the local executor: it reads Home Assistant state, requests artifacts from the cloud, applies them to the Home Assistant config, and runs local integration tasks such as Browser Mod and Playwright flows.
 
 ## Configuration
 

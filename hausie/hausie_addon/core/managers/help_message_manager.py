@@ -6,33 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..flow_logger import get_logger
 from ..utils.naming import slugify
-
-
-DEFAULT_MESSAGES: dict[str, list[dict[str, Any]]] = {
-    "main": [{"text": "This is help for main view.", "weight": 1}],
-    "devices": [{"text": "This is help for device view", "weight": 1}],
-    "buttons": [{"text": "This is help for buttons view.", "weight": 1}],
-    "battery": [{"text": "This is help for battery view.", "weight": 1}],
-    "light_config": [{"text": "This is help for light automation view.", "weight": 1}],
-    "blinds_config": [{"text": "This is help for blinds configuration view.", "weight": 1}],
-    "temperature_config": [{"text": "This is help for temperature automations view.", "weight": 1}],
-    "notify_automation": [{"text": "This is help for notify automation view.", "weight": 1}],
-    "new-devices": [
-        {
-            "text": (
-                "Remember to add common and short names to the new devices, "
-                "this will help you use them easily. please select one of the following "
-                "labels that apply to the kind of device you are adding"
-            ),
-            "weight": 1,
-        }
-    ],
-    "users": [{"text": "This is help for users config view.", "weight": 1}],
-    "automations": [{"text": "This is help for automations view.", "weight": 1}],
-    "hausie": [{"text": "This is help for the Hausie dashboard.", "weight": 1}],
-}
 
 
 @dataclass
@@ -45,7 +19,6 @@ class HelpMessageManager:
         env_path_raw = os.getenv("HAUSIE_HELP_MESSAGES_PATH", "").strip() if not env_override else ""
         env_path = Path(env_path_raw) if env_path_raw else None
         self.path = env_override or env_path or default_path
-        self._log = get_logger("ui")
 
     @staticmethod
     def entity_id_for_view(view_key: str) -> str:
@@ -65,9 +38,6 @@ class HelpMessageManager:
         views = data.get("views")
         if not isinstance(views, dict):
             views = {}
-        for view_key, messages in DEFAULT_MESSAGES.items():
-            if view_key not in views:
-                views[view_key] = {"messages": messages, "cursor": 0}
         for view_key, view_data in list(views.items()):
             if not isinstance(view_data, dict):
                 views[view_key] = {"messages": self._normalize_messages(view_data), "cursor": 0}
