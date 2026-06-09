@@ -150,6 +150,10 @@ def _resolve_addon_version() -> str:
 
 
 def _resolve_subscription_plan(settings: Settings) -> str | None:
+    license_state = load_license_state()
+    local_plan = str(license_state.get("plan") or "").strip()
+    if local_plan:
+        return local_plan
     if not settings.HAUSIE_CLOUD_URL or not settings.HAUSIE_CLOUD_TOKEN:
         return None
     try:
@@ -161,7 +165,7 @@ def _resolve_subscription_plan(settings: Settings) -> str | None:
         )
         data = cloud.request_subscription_status()
     except Exception as exc:
-        get_logger("addon").warn(f"Subscription status check failed: {exc}")
+        get_logger("addon").warn(f"Subscription status fallback failed: {exc}")
         return None
     plan = data.get("tier") or data.get("plan")
     plan_text = str(plan).strip() if plan else ""
@@ -2171,6 +2175,11 @@ def _apply_plan_badge(ha: HAClient, plan_badge: dict | None) -> None:
 
 
 def _refresh_license_state_from_cloud(settings: Settings, log) -> None:
+    # The heartbeat is now the source for runtime license state. Keep this as a
+    # compatibility no-op so older call sites do not emit legacy 404 warnings.
+    license_state = load_license_state()
+    if license_state:
+        return
     if not settings.HAUSIE_CLOUD_URL or not settings.HAUSIE_CLOUD_TOKEN:
         return
     try:
@@ -2181,8 +2190,7 @@ def _refresh_license_state_from_cloud(settings: Settings, log) -> None:
             create_hausie_timeout_s=settings.HAUSIE_CLOUD_CREATE_HAUSIE_TIMEOUT,
         )
         payload = cloud.request_subscription_status()
-    except Exception as exc:
-        log.warn(f"License refresh skipped: {exc}")
+    except Exception:
         return
     if isinstance(payload, dict):
         _store_license_payload(payload, log)
