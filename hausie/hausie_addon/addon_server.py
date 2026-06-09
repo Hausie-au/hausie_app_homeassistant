@@ -16,7 +16,6 @@ import websocket
 from .core.clients.ha_client import HAClient
 from .core.cloud_client import CloudClient
 from .core.flow_logger import get_logger
-from .core.io.pi_file_sender import PiFileSender
 from .core.managers.notification_manager import NotificationManager
 from .core.mqtt_listener import MQTTNotificationListener
 from .core.heartbeat import HeartbeatReporter
@@ -376,38 +375,40 @@ def _resolve_local_ha_root() -> Path | None:
     return local_root if local_root.exists() else None
 
 
-def _mirror_local_artifact(local_root: Path | None, rel_path: str, content: str, log) -> None:
+def _mirror_local_artifact(local_root: Path | None, rel_path: str, content: str, log) -> bool:
     if not local_root or not rel_path:
-        return
+        return False
     try:
         local_path = (local_root / rel_path).resolve()
         local_path.relative_to(local_root)
     except Exception:
-        return
+        return False
     try:
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_text(str(content), encoding="utf-8")
-        log.ok(f"Mirrored {rel_path} to local repo.")
+        return True
     except Exception as exc:
         log.warn(f"Local mirror failed for {rel_path}: {exc}")
+        return False
 
 
-def _remove_local_artifact(local_root: Path | None, rel_path: str, log) -> None:
+def _remove_local_artifact(local_root: Path | None, rel_path: str, log) -> bool:
     if not local_root or not rel_path:
-        return
+        return False
     try:
         local_path = (local_root / rel_path).resolve()
         local_path.relative_to(local_root)
     except Exception:
-        return
+        return False
     try:
         if local_path.is_dir():
             shutil.rmtree(local_path, ignore_errors=True)
         elif local_path.exists():
             local_path.unlink()
-        log.ok(f"Removed local mirror {rel_path}.")
+        return True
     except Exception as exc:
         log.warn(f"Local mirror delete failed for {rel_path}: {exc}")
+        return False
 
 
 def _start_mqtt_listener() -> None:
@@ -916,64 +917,19 @@ def _resolve_pi_dashboard_dir() -> str:
     return os.getenv("PI_DASHBOARD_DIR") or f"{root}/dashboards"
 
 
-def _use_remote_sender() -> bool:
-    if os.getenv("HAUSIE_LOCAL_MODE", "").strip().lower() in {"1", "true", "yes"}:
-        return False
-    if os.getenv("SUPERVISOR_TOKEN") and os.getenv("HAUSIE_FORCE_SSH", "").strip().lower() not in {"1", "true", "yes"}:
-        return False
-    return True
-
-
 def _sync_config_dashboard_to_pi(local_path: Path) -> None:
-    if not _use_remote_sender():
-        # HAOS local mode: ensure dashboard is under /homeassistant/dashboards
-        target = Path(os.getenv("PI_DASHBOARD_DIR", "/homeassistant/dashboards")) / _CONFIG_DASHBOARD_FILENAME
-        if local_path.resolve() != target.resolve():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if local_path.exists():
-                target.write_text(local_path.read_text(encoding="utf-8"), encoding="utf-8")
-        return
-    pi_host = os.getenv("PI_HOST")
-    pi_user = os.getenv("PI_USER")
-    if not pi_host or not pi_user:
-        return
-    pi_port = int(os.getenv("PI_PORT", "22"))
-    pi_key = os.getenv("PI_SSH_KEY") or None
-    pi_scp_legacy = os.getenv("PI_SCP_LEGACY", "").strip().lower() in {"1", "true", "yes"}
-    sender = PiFileSender(
-        host=pi_host,
-        user=pi_user,
-        port=pi_port,
-        key_path=pi_key,
-        use_scp_legacy=pi_scp_legacy,
-    )
-    remote_path = f"{_resolve_pi_dashboard_dir().rstrip('/')}/{_CONFIG_DASHBOARD_FILENAME}"
-    sender.send_file(local_path, remote_path)
+    target = Path(_resolve_pi_dashboard_dir()) / _CONFIG_DASHBOARD_FILENAME
+    if local_path.resolve() != target.resolve():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if local_path.exists():
+            target.write_text(local_path.read_text(encoding="utf-8"), encoding="utf-8")
 
 def _sync_config_dashboard_from_pi(local_path: Path) -> None:
-    if not _use_remote_sender():
-        return
-    pi_host = os.getenv("PI_HOST")
-    pi_user = os.getenv("PI_USER")
-    if not pi_host or not pi_user:
-        return
-    pi_port = int(os.getenv("PI_PORT", "22"))
-    pi_key = os.getenv("PI_SSH_KEY") or None
-    pi_scp_legacy = os.getenv("PI_SCP_LEGACY", "").strip().lower() in {"1", "true", "yes"}
-    sender = PiFileSender(
-        host=pi_host,
-        user=pi_user,
-        port=pi_port,
-        key_path=pi_key,
-        use_scp_legacy=pi_scp_legacy,
-    )
-    remote_path = f"{_resolve_pi_dashboard_dir().rstrip('/')}/{_CONFIG_DASHBOARD_FILENAME}"
-    try:
-        text = sender.read_remote_text(remote_path)
-    except Exception:
+    source = Path(_resolve_pi_dashboard_dir()) / _CONFIG_DASHBOARD_FILENAME
+    if not source.exists():
         return
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    local_path.write_text(text, encoding="utf-8")
+    local_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def _ha_config_root() -> Path:
@@ -1349,19 +1305,25 @@ def _reload_services(ha: HAClient, log) -> None:
         }
     except Exception as exc:
         log.warn(f"Failed to list Home Assistant services before reload: {exc}")
+    reloaded = 0
+    skipped = 0
     for domain, service in services:
         if available is not None and (domain, service) not in available:
-            log.skip(f"Skipped {domain}.{service}; service is not exposed by this Home Assistant instance.")
+            skipped += 1
             continue
         try:
             ha.call_service(domain, service, {})
-            log.ok(f"Reloaded {domain}.{service}.")
+            reloaded += 1
         except Exception as exc:
             log.warn(f"Reload {domain}.{service} failed: {exc}")
+    if reloaded or skipped:
+        summary = f"Reloaded {reloaded} Home Assistant services."
+        if skipped:
+            summary += f" Skipped {skipped} unavailable optional services."
+        log.info(summary)
 
 
 def _apply_cloud_artifacts(
-    sender: PiFileSender | None,
     *,
     remote_root: str,
     artifacts: list[dict] | None,
@@ -1372,6 +1334,10 @@ def _apply_cloud_artifacts(
     if not artifacts and not deletes:
         log.skip("No cloud artifacts to apply.")
         return applied
+    updated_count = 0
+    deleted_count = 0
+    mirrored_count = 0
+    removed_local_count = 0
     local_root = _resolve_local_ha_root()
     root = (remote_root or "").rstrip("/")
     for item in artifacts or []:
@@ -1382,45 +1348,38 @@ def _apply_cloud_artifacts(
         if not rel_path or content is None:
             continue
         remote_path = rel_path if rel_path.startswith("/") else f"{root}/{rel_path}" if root else rel_path
-        if sender:
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
-                tmp.write(str(content))
-                tmp_path = tmp.name
-            try:
-                sender.send_file(tmp_path, remote_path)
-                log.ok(f"Updated {remote_path}.")
-                applied[remote_path] = str(content)
-            finally:
-                Path(tmp_path).unlink(missing_ok=True)
-        else:
-            path = Path(remote_path)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(str(content), encoding="utf-8")
-            log.ok(f"Updated {remote_path}.")
-            applied[remote_path] = str(content)
-        _mirror_local_artifact(local_root, rel_path, str(content), log)
+        path = Path(remote_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(content), encoding="utf-8")
+        applied[remote_path] = str(content)
+        updated_count += 1
+        if _mirror_local_artifact(local_root, rel_path, str(content), log):
+            mirrored_count += 1
 
     for rel_path in deletes or []:
         if not rel_path:
             continue
         remote_path = rel_path if rel_path.startswith("/") else f"{root}/{rel_path}" if root else rel_path
-        if sender:
-            try:
-                sender.remove_remote(remote_path)
-                log.ok(f"Deleted {remote_path}.")
-            except Exception as exc:
-                log.warn(f"Failed to delete {remote_path}: {exc}")
-        else:
-            try:
-                path = Path(remote_path)
-                if path.is_dir():
-                    shutil.rmtree(path, ignore_errors=True)
-                elif path.exists():
-                    path.unlink()
-                log.ok(f"Deleted {remote_path}.")
-            except Exception as exc:
-                log.warn(f"Failed to delete {remote_path}: {exc}")
-        _remove_local_artifact(local_root, rel_path, log)
+        try:
+            path = Path(remote_path)
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.exists():
+                path.unlink()
+            deleted_count += 1
+        except Exception as exc:
+            log.warn(f"Failed to delete {remote_path}: {exc}")
+        if _remove_local_artifact(local_root, rel_path, log):
+            removed_local_count += 1
+    if updated_count or deleted_count or mirrored_count or removed_local_count:
+        parts = [f"Applied cloud artifacts: {updated_count} updated"]
+        if deleted_count:
+            parts.append(f"{deleted_count} deleted")
+        if mirrored_count:
+            parts.append(f"{mirrored_count} mirrored locally")
+        if removed_local_count:
+            parts.append(f"{removed_local_count} local mirrors removed")
+        log.info(", ".join(parts) + ".")
     return applied
 
 
@@ -1593,17 +1552,6 @@ def _run_create_hausie(*, force_full: bool = False, plan_override: str | None = 
         if not settings.HAUSIE_CLOUD_URL:
             raise RuntimeError("HAUSIE_CLOUD_URL es requerido para generar assets en cloud.")
         ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
-        sender = None
-        if settings.PI_HOST and settings.PI_USER:
-            sender = PiFileSender(
-                host=settings.PI_HOST,
-                user=settings.PI_USER,
-                port=settings.PI_PORT,
-                key_path=settings.PI_SSH_KEY,
-                use_scp_legacy=settings.PI_SCP_LEGACY,
-            )
-        else:
-            log.warn("PI_HOST/PI_USER no definidos; usando modo local.")
         ha.fetch_all(include_users=True)
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
         labels = ha.fetch_labels()
@@ -1634,7 +1582,6 @@ def _run_create_hausie(*, force_full: bool = False, plan_override: str | None = 
         else:
             _refresh_free_plan_cache("create", cloud, payload, log)
         applied = _apply_cloud_artifacts(
-            sender,
             remote_root=settings.PI_HA_CONFIG_DIR,
             artifacts=response.get("artifacts") if isinstance(response, dict) else None,
             deletes=response.get("deletes") if isinstance(response, dict) else None,
@@ -1726,17 +1673,6 @@ def _run_create_base(*, force_full: bool = False, plan_override: str | None = No
         if not settings.HAUSIE_CLOUD_URL:
             raise RuntimeError("HAUSIE_CLOUD_URL es requerido para generar assets en cloud.")
         ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
-        sender = None
-        if settings.PI_HOST and settings.PI_USER:
-            sender = PiFileSender(
-                host=settings.PI_HOST,
-                user=settings.PI_USER,
-                port=settings.PI_PORT,
-                key_path=settings.PI_SSH_KEY,
-                use_scp_legacy=settings.PI_SCP_LEGACY,
-            )
-        else:
-            log.warn("PI_HOST/PI_USER no definidos; usando modo local.")
         log.start("Fetching Home Assistant snapshot.")
         ha.fetch_all(include_users=True)
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
@@ -1778,7 +1714,6 @@ def _run_create_base(*, force_full: bool = False, plan_override: str | None = No
             _refresh_free_plan_cache("base", cloud, payload, log)
         log.start("Applying cloud artifacts to Home Assistant config.")
         _apply_cloud_artifacts(
-            sender,
             remote_root=settings.PI_HA_CONFIG_DIR,
             artifacts=response.get("artifacts") if isinstance(response, dict) else None,
             deletes=response.get("deletes") if isinstance(response, dict) else None,
@@ -1790,9 +1725,9 @@ def _run_create_base(*, force_full: bool = False, plan_override: str | None = No
         if settings.PI_CONFIG_PATH:
             log.start("Updating configuration.yaml.")
             config = ConfigManager(
-                pi_sender=sender,
+                pi_sender=None,
                 config_path=settings.PI_CONFIG_PATH,
-                require_remote=bool(sender),
+                require_remote=False,
             )
             config.sync_config_dashboard()
         log.start("Reloading Home Assistant services.")
@@ -1854,17 +1789,7 @@ def _apply_cached_plan_cache(kind: str, log) -> None:
     if not artifacts and not deletes:
         raise RuntimeError(f"Missing cached free-plan payload for {kind}.")
     settings = Settings()
-    sender = None
-    if settings.PI_HOST and settings.PI_USER:
-        sender = PiFileSender(
-            host=settings.PI_HOST,
-            user=settings.PI_USER,
-            port=settings.PI_PORT,
-            key_path=settings.PI_SSH_KEY,
-            use_scp_legacy=settings.PI_SCP_LEGACY,
-        )
     _apply_cloud_artifacts(
-        sender,
         remote_root=settings.PI_HA_CONFIG_DIR,
         artifacts=artifacts,
         deletes=deletes,
@@ -1923,17 +1848,6 @@ def _run_create_test() -> None:
         if not settings.HAUSIE_CLOUD_URL:
             raise RuntimeError("HAUSIE_CLOUD_URL es requerido para generar test assets en cloud.")
         ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
-        sender = None
-        if settings.PI_HOST and settings.PI_USER:
-            sender = PiFileSender(
-                host=settings.PI_HOST,
-                user=settings.PI_USER,
-                port=settings.PI_PORT,
-                key_path=settings.PI_SSH_KEY,
-                use_scp_legacy=settings.PI_SCP_LEGACY,
-            )
-        else:
-            log.warn("PI_HOST/PI_USER no definidos; usando modo local.")
         log.start("Fetching Home Assistant snapshot.")
         ha.fetch_all(include_users=True)
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
@@ -1956,7 +1870,6 @@ def _run_create_test() -> None:
         response = cloud.request_test_assets(payload)
         log.start("Applying cloud artifacts to Home Assistant config.")
         _apply_cloud_artifacts(
-            sender,
             remote_root=settings.PI_HA_CONFIG_DIR,
             artifacts=response.get("artifacts") if isinstance(response, dict) else None,
             deletes=response.get("deletes") if isinstance(response, dict) else None,
@@ -1965,9 +1878,9 @@ def _run_create_test() -> None:
         if settings.PI_CONFIG_PATH:
             log.start("Updating configuration.yaml.")
             config = ConfigManager(
-                pi_sender=sender,
+                pi_sender=None,
                 config_path=settings.PI_CONFIG_PATH,
-                require_remote=bool(sender),
+                require_remote=False,
             )
             config.sync_config_dashboard()
         log.start("Reloading Home Assistant services.")
