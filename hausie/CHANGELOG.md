@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.35
+
+- Send the add-on's current license plan and status when requesting cloud-generated artifacts.
+- Resolve config-dashboard plan gating from the authoritative cloud license context before falling back to defaults.
+- Reset cached feature flags when the dashboard subscription plan changes.
+
 ## 0.2.27
 
 - Remove legacy local generation paths from the add-on so Hausie Cloud is the only artifact generator.

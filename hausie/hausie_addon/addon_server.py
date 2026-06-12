@@ -1554,6 +1554,8 @@ def _run_create_hausie(*, force_full: bool = False, plan_override: str | None = 
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
         labels = ha.fetch_labels()
         device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
+        current_plan = _resolve_subscription_plan(settings) or ""
+        current_license = load_license_state()
         payload = {
             "areas": raw.get("areas", []),
             "devices": raw.get("devices", []),
@@ -1561,6 +1563,8 @@ def _run_create_hausie(*, force_full: bool = False, plan_override: str | None = 
             "services": raw.get("services", []),
             "users": raw.get("users", []),
             "labels": labels,
+            "current_plan": current_plan,
+            "license_status": str(current_license.get("license_status") or "").strip(),
         }
         if force_full:
             payload["force_full"] = True
@@ -1685,6 +1689,8 @@ def _run_create_base(*, force_full: bool = False, plan_override: str | None = No
         except Exception:
             computed_force_full = False
         device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
+        current_plan = _resolve_subscription_plan(settings) or ""
+        current_license = load_license_state()
         payload = {
             "areas": raw.get("areas", []),
             "devices": raw.get("devices", []),
@@ -1693,6 +1699,8 @@ def _run_create_base(*, force_full: bool = False, plan_override: str | None = No
             "users": raw.get("users", []),
             "labels": labels,
             "force_full": bool(force_full or computed_force_full),
+            "current_plan": current_plan,
+            "license_status": str(current_license.get("license_status") or "").strip(),
         }
         if plan_override:
             payload["plan_override"] = str(plan_override).strip()
@@ -1851,10 +1859,14 @@ def _run_create_test() -> None:
         raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
         labels = ha.fetch_labels()
         device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
+        current_plan = _resolve_subscription_plan(settings) or ""
+        current_license = load_license_state()
         payload = {
             "areas": raw.get("areas", []),
             "users": raw.get("users", []),
             "labels": labels,
+            "current_plan": current_plan,
+            "license_status": str(current_license.get("license_status") or "").strip(),
         }
         if device_id:
             payload["device_id"] = device_id
