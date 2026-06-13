@@ -1055,6 +1055,11 @@ def _cleanup_hausie_assets() -> dict[str, object]:
         for path in groups_dir.glob("*.yaml"):
             _remove_file(path, removed)
 
+    covers_dir = root / "covers"
+    if covers_dir.exists():
+        for path in covers_dir.glob("*.yaml"):
+            _remove_file(path, removed)
+
     scripts_dir = root / "scripts"
     if scripts_dir.exists():
         for path in scripts_dir.glob("*.yaml"):

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.36
+
+- Remove generated cover YAMLs during Hausie cleanup so stale global blinds groups do not survive rebuilds.
+
 ## 0.2.35
 
 - Send the add-on's current license plan and status when requesting cloud-generated artifacts.
