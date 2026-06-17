@@ -1411,6 +1411,14 @@ def _reload_services(ha: HAClient, log) -> None:
         log.info(summary)
 
 
+def _reload_browser_frontends(ha: HAClient, log) -> None:
+    try:
+        ha.call_service("browser_mod", "window_reload", {})
+        log.info("Requested browser refresh via Browser Mod.")
+    except Exception as exc:
+        log.warn(f"Browser refresh skipped: {exc}")
+
+
 def _apply_cloud_artifacts(
     *,
     remote_root: str,
@@ -1725,6 +1733,7 @@ def _run_sync_inventory(
             else:
                 log.warn("UI update skipped: cloud response missing 'ui' payload.")
             _reload_services(ha, log)
+            _reload_browser_frontends(ha, log)
             _sync_voice_exposure(ha, response if isinstance(response, dict) else None, log)
             _apply_plan_badge(ha, response.get("plan_badge") if isinstance(response, dict) else None)
             _refresh_license_state_from_cloud(settings, log)

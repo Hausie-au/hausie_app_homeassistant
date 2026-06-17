@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import tempfile
 
@@ -114,7 +115,7 @@ class ConfigManager:
             raise RuntimeError("PI sender and config_path are required.")
 
     @staticmethod
-    def _ensure_config_dashboard(doc: dict) -> dict:
+    def _ensure_config_dashboard(doc: dict, *, include_main_dashboard: bool = False) -> dict:
         if not isinstance(doc, dict):
             raise ValueError("configuration.yaml must be a mapping.")
         lovelace = doc.get("lovelace")
@@ -129,6 +130,7 @@ class ConfigManager:
             raise ValueError("lovelace.dashboards must be a mapping.")
 
         dashboards.pop("config", None)
+        dashboards.pop("hausie-dashboard", None)
         dashboards["config-dashboard"] = {
             "mode": "yaml",
             "title": "Configuration",
@@ -136,6 +138,14 @@ class ConfigManager:
             "show_in_sidebar": True,
             "filename": "dashboards/hausie_configuration_dashboard.yaml",
         }
+        if include_main_dashboard:
+            dashboards["hausie-dashboard"] = {
+                "mode": "yaml",
+                "title": "Hausie",
+                "icon": "mdi:home-assistant",
+                "show_in_sidebar": True,
+                "filename": "dashboards/hausie_dashboard.yaml",
+            }
         dashboards["test-dashboard"] = {
             "mode": "yaml",
             "title": "Test",
@@ -337,6 +347,34 @@ class ConfigManager:
             doc.pop("rest_command", None)
         return doc
 
+    def _resolve_config_root(self) -> Path:
+        if self.config_path:
+            try:
+                return Path(self.config_path).resolve().parent
+            except Exception:
+                pass
+        return self.local_config_path.parent
+
+    def _storage_main_dashboard_exists(self) -> bool:
+        storage_path = self._resolve_config_root() / ".storage" / "lovelace_dashboards"
+        if not storage_path.exists():
+            return False
+        try:
+            payload = json.loads(storage_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        items = ((payload or {}).get("data") or {}).get("items") or []
+        if not isinstance(items, list):
+            return False
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("id") or "").strip() == "dashboard_hausie":
+                return True
+            if str(item.get("url_path") or "").strip() == "dashboard-hausie":
+                return True
+        return False
+
 
     def sync_config_dashboard(self) -> None:
         """Update configuration.yaml to include the config dashboard."""
@@ -354,7 +392,10 @@ class ConfigManager:
                 config_text = path.read_text(encoding="utf-8")
 
         config_doc = _load_yaml_with_tags(config_text)
-        config_doc = self._ensure_config_dashboard(config_doc)
+        config_doc = self._ensure_config_dashboard(
+            config_doc,
+            include_main_dashboard=not self._storage_main_dashboard_exists(),
+        )
         config_doc = self._ensure_shell_commands(config_doc)
         config_doc = self._ensure_rest_commands(config_doc)
 
@@ -415,7 +456,7 @@ class ConfigManager:
             if isinstance(lovelace, dict):
                 dashboards = lovelace.get("dashboards")
                 if isinstance(dashboards, dict):
-                    keys = ["config-dashboard"]
+                    keys = ["config-dashboard", "hausie-dashboard"]
                     if not keep_test_dashboard:
                         keys.append("test-dashboard")
                     for key in keys:
