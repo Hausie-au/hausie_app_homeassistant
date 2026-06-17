@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -150,7 +152,7 @@ def _resolve_addon_version() -> str:
 
 def _resolve_subscription_plan(settings: Settings) -> str | None:
     license_state = load_license_state()
-    local_plan = str(license_state.get("plan") or "").strip()
+    local_plan = _normalize_plan_id(license_state.get("plan"))
     if local_plan:
         return local_plan
     if not settings.HAUSIE_CLOUD_URL or not settings.HAUSIE_CLOUD_TOKEN:
@@ -166,9 +168,17 @@ def _resolve_subscription_plan(settings: Settings) -> str | None:
     except Exception as exc:
         get_logger("addon").warn(f"Subscription status fallback failed: {exc}")
         return None
-    plan = data.get("tier") or data.get("plan")
-    plan_text = str(plan).strip() if plan else ""
-    return plan_text or None
+    return _normalize_plan_id(data.get("tier") or data.get("plan")) or None
+
+
+def _normalize_plan_id(value: Any, default: str = "plan_1") -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return default
+    match = re.search(r"plan[\s_]*(\d+)", raw)
+    if match:
+        return f"plan_{match.group(1)}"
+    return raw or default
 
 
 def _sync_license_state_from_cloud(
@@ -208,7 +218,7 @@ def _update_rebuild_state(state: dict, *, plan: str | None, version: str | None)
     save_device_state(state)
 
 
-_REBUILD_ALLOWED_STEPS = {"create_base", "create_hausie"}
+_REBUILD_ALLOWED_STEPS = {"create_base", "create_hausie", "sync_inventory"}
 
 
 def _normalize_rebuild_steps(value) -> list[str]:
@@ -219,6 +229,8 @@ def _normalize_rebuild_steps(value) -> list[str]:
     steps: list[str] = []
     for item in value:
         step = str(item or "").strip().lower()
+        if step == "sync_inventory":
+            step = "create_hausie"
         if step in _REBUILD_ALLOWED_STEPS and step not in steps:
             steps.append(step)
     return steps
@@ -234,8 +246,11 @@ def _resolve_local_rebuild_plan(
     plan_changed = False
     version_changed = False
 
-    if current_plan:
-        plan_changed = current_plan.strip().lower() != last_plan if last_plan else True
+    normalized_current_plan = _normalize_plan_id(current_plan, "") if current_plan else ""
+    normalized_last_plan = _normalize_plan_id(last_plan, "") if last_plan else ""
+
+    if normalized_current_plan:
+        plan_changed = normalized_current_plan != normalized_last_plan if normalized_last_plan else True
     elif last_plan:
         plan_changed = True
 
@@ -257,7 +272,7 @@ def _resolve_local_rebuild_plan(
 
     return {
         "execution_plan": steps,
-        "plan": current_plan,
+        "plan": normalized_current_plan or None,
         "reason": reason,
         "source": "local",
     }
@@ -319,9 +334,9 @@ def _resolve_remote_rebuild_plan(
 
 def _execute_rebuild_steps(steps: list[str], log) -> None:
     if "create_base" in steps:
-        _run_create_base()
+        _run_create_base(manage_activity=False)
     if "create_hausie" in steps:
-        _run_create_hausie()
+        _run_sync_inventory(manage_activity=False)
 
 
 def _resolve_mqtt_enabled() -> bool:
@@ -337,6 +352,7 @@ _SUPPORT_MANAGER: RemoteSupportManager | None = None
 _HEARTBEAT: HeartbeatReporter | None = None
 _HEARTBEAT_ACTION_LOCK = threading.Lock()
 _HEARTBEAT_ACTION_RUNNING = False
+_WORKFLOW_LOCK = threading.Lock()
 _LICENSE_MONITOR_THREAD: threading.Thread | None = None
 _LICENSE_MONITOR_STOP = threading.Event()
 
@@ -345,6 +361,7 @@ _BASE_AUTOMATION_IDS = {
     "new_device_saved",
     "ui_help_rotate_messages",
     "new_devices_scan_daily",
+    "core_sync_inventory",
     "core_rebuild_hausie",
     "core_restart_hausie",
 }
@@ -625,7 +642,7 @@ def _start_license_monitor() -> None:
                     downgraded_license = dict(license_state)
                     downgraded_license.update(
                         {
-                            "plan": "plan 1",
+                            "plan": "plan_1",
                             "license_status": "downgraded",
                             "offline_valid_until": None,
                             "addon_message": {
@@ -636,7 +653,7 @@ def _start_license_monitor() -> None:
                     )
                     log.warn("License validation expired locally; downgrading to free plan.")
                     _run_apply_plan(
-                        target_plan="plan 1",
+                        target_plan="plan_1",
                         license_payload=downgraded_license,
                         allow_local_free_fallback=True,
                     )
@@ -674,6 +691,44 @@ def _resolve_ha_client() -> HAClient | None:
     ha_ws_url = os.getenv("HA_WS_URL", "ws://homeassistant:8123/api/websocket")
     ha_rest_url = os.getenv("HA_REST_URL", "http://homeassistant:8123/api")
     return HAClient(ha_url_ws=ha_ws_url, ha_url_rest=ha_rest_url, token=token)
+
+
+def _set_hausie_system_state(ha: HAClient | None, *, busy: bool, status: str) -> None:
+    if not ha:
+        return
+    try:
+        ha.call_service(
+            "input_text",
+            "set_value",
+            {
+                "entity_id": "input_text.hausie_system_status",
+                "value": str(status or "Idle"),
+            },
+        )
+    except Exception:
+        pass
+    try:
+        ha.call_service(
+            "input_boolean",
+            "turn_on" if busy else "turn_off",
+            {"entity_id": "input_boolean.hausie_system_busy"},
+        )
+    except Exception:
+        pass
+
+
+@contextmanager
+def _workflow_activity(status: str, *, manage_lock: bool = True):
+    if manage_lock and not _WORKFLOW_LOCK.acquire(blocking=False):
+        raise RuntimeError("Another Hausie action is already in progress.")
+    ha = _resolve_ha_client()
+    _set_hausie_system_state(ha, busy=True, status=status)
+    try:
+        yield
+    finally:
+        _set_hausie_system_state(ha, busy=False, status="Idle")
+        if manage_lock:
+            _WORKFLOW_LOCK.release()
 
 
 def _resolve_heartbeat_interval() -> int:
@@ -758,6 +813,7 @@ _HEARTBEAT_ALLOWED_ACTIONS = {
     "cleanup_hausie_assets",
     "create_base",
     "create_hausie",
+    "sync_inventory",
     "create_ha_support_user",
     "delete_ha_support_user",
     "rebuild_hausie",
@@ -866,7 +922,7 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
             return
         if "refresh_plan" in lower_actions or "update_plan" in lower_actions:
             with log.script("refresh_plan"):
-                target_plan = str(license_payload.get("plan") or "").strip() or "plan 1"
+                target_plan = _normalize_plan_id(license_payload.get("plan"))
                 _run_apply_plan(
                     target_plan=target_plan,
                     license_payload=license_payload if license_payload else None,
@@ -879,7 +935,7 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
                     if str(action.get("type") or "").strip().lower() != "apply_plan":
                         continue
                     action_payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
-                    target_plan = str(action_payload.get("target_plan") or "").strip() or "plan 1"
+                    target_plan = _normalize_plan_id(action_payload.get("target_plan"))
                     license_data = action_payload.get("license") if isinstance(action_payload.get("license"), dict) else license_payload
                     _run_apply_plan(target_plan=target_plan, license_payload=license_data, allow_local_free_fallback=False)
             normalized = [action for action in normalized if str(action.get("type") or "").strip().lower() != "apply_plan"]
@@ -920,8 +976,8 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
             if action_type == "create_base":
                 _run_create_base()
                 continue
-            if action_type == "create_hausie":
-                _run_create_hausie()
+            if action_type in {"create_hausie", "sync_inventory"}:
+                _run_sync_inventory()
                 continue
             if action_type == "rebuild_hausie":
                 _run_rebuild_hausie()
@@ -1576,223 +1632,241 @@ def _resync_voice_exposure_from_state(log) -> None:
     )
 
 
-def _run_create_hausie(*, force_full: bool = False, plan_override: str | None = None) -> None:
+def _run_sync_inventory(
+    *,
+    force_full: bool = False,
+    plan_override: str | None = None,
+    manage_activity: bool = True,
+) -> None:
     log = get_logger("addon")
-    with log.script("create_hausie"):
-        settings = Settings()
-        if not settings.HAUSIE_CLOUD_URL:
-            raise RuntimeError("HAUSIE_CLOUD_URL es requerido para generar assets en cloud.")
-        ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
-        ha.fetch_all(include_users=True)
-        raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
-        labels = ha.fetch_labels()
-        device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
-        current_license = _sync_license_state_from_cloud(settings, log, force=True)
-        current_plan = str(current_license.get("plan") or "").strip() or _resolve_subscription_plan(settings) or ""
-        payload = {
-            "areas": raw.get("areas", []),
-            "devices": raw.get("devices", []),
-            "entities": raw.get("entities", []),
-            "services": raw.get("services", []),
-            "users": raw.get("users", []),
-            "labels": labels,
-            "current_plan": current_plan,
-            "license_status": str(current_license.get("license_status") or "").strip(),
-        }
-        if force_full:
-            payload["force_full"] = True
-        if plan_override:
-            payload["plan_override"] = str(plan_override).strip()
-        if device_id:
-            payload["device_id"] = device_id
-        cloud = CloudClient(
-            base_url=settings.HAUSIE_CLOUD_URL,
-            token=settings.HAUSIE_CLOUD_TOKEN,
-            timeout_s=settings.HAUSIE_CLOUD_TIMEOUT,
-            create_hausie_timeout_s=settings.HAUSIE_CLOUD_CREATE_HAUSIE_TIMEOUT,
-        )
-        response = cloud.request_create_hausie(payload)
-        if str(plan_override or "").strip().lower() == "plan 1":
-            _save_free_plan_bundle("create", response if isinstance(response, dict) else {}, log)
-        else:
-            _refresh_free_plan_cache("create", cloud, payload, log)
-        applied = _apply_cloud_artifacts(
-            remote_root=settings.PI_HA_CONFIG_DIR,
-            artifacts=response.get("artifacts") if isinstance(response, dict) else None,
-            deletes=response.get("deletes") if isinstance(response, dict) else None,
-            log=log,
-        )
-        ui_payload = response.get("ui") if isinstance(response, dict) else None
-        if isinstance(ui_payload, dict):
-            dashboard_yaml = ui_payload.get("main_dashboard_yaml")
-            dashboard_path = ui_payload.get("dashboard_path") or "dashboard-hausie/0"
-            if not dashboard_yaml:
-                dash_file = ui_payload.get("main_dashboard_file")
-                if dash_file:
-                    resolved = dash_file if dash_file.startswith("/") else f"{settings.PI_HA_CONFIG_DIR.rstrip('/')}/{dash_file}"
-                    dashboard_yaml = applied.get(resolved)
-                    if not dashboard_yaml:
-                        log.warn(f"UI update skipped: dashboard YAML not found in applied artifacts ({resolved}).")
-            if not settings.HA_UI_USERNAME or not settings.HA_UI_PASSWORD:
-                log.warn("UI update skipped: HA_UI_USERNAME/HA_UI_PASSWORD not set.")
-            elif not dashboard_yaml:
-                log.warn("UI update skipped: dashboard YAML content missing.")
+    with _workflow_activity("Syncing inventory", manage_lock=manage_activity):
+        with log.script("sync_inventory"):
+            settings = Settings()
+            if not settings.HAUSIE_CLOUD_URL:
+                raise RuntimeError("HAUSIE_CLOUD_URL es requerido para generar assets en cloud.")
+            ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
+            ha.fetch_all(include_users=True)
+            raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
+            labels = ha.fetch_labels()
+            device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
+            current_license = _sync_license_state_from_cloud(settings, log, force=True)
+            current_plan = _normalize_plan_id(current_license.get("plan"), "") or _resolve_subscription_plan(settings) or ""
+            payload = {
+                "areas": raw.get("areas", []),
+                "devices": raw.get("devices", []),
+                "entities": raw.get("entities", []),
+                "services": raw.get("services", []),
+                "users": raw.get("users", []),
+                "labels": labels,
+                "current_plan": current_plan,
+                "license_status": str(current_license.get("license_status") or "").strip(),
+            }
+            if force_full:
+                payload["force_full"] = True
+            if plan_override:
+                payload["plan_override"] = _normalize_plan_id(plan_override)
+            if device_id:
+                payload["device_id"] = device_id
+            cloud = CloudClient(
+                base_url=settings.HAUSIE_CLOUD_URL,
+                token=settings.HAUSIE_CLOUD_TOKEN,
+                timeout_s=settings.HAUSIE_CLOUD_TIMEOUT,
+                create_hausie_timeout_s=settings.HAUSIE_CLOUD_CREATE_HAUSIE_TIMEOUT,
+            )
+            response = cloud.request_sync_inventory(payload)
+            if _normalize_plan_id(plan_override, "") == "plan_1":
+                _save_free_plan_bundle("create", response if isinstance(response, dict) else {}, log)
             else:
-                log.start("Updating dashboard via UI.")
-                autom = DashboardUpdater(
-                    base_url=settings.HA_REST_URL.rsplit("/api", 1)[0],
-                    username=settings.HA_UI_USERNAME,
-                    password=settings.HA_UI_PASSWORD,
-                    headless=True,
-                    storage_state_path=None,
-                )
-                try:
-                    autom.write_yaml_to_ui(dashboard_path, dashboard_yaml)
-                    log.ok("Dashboard UI updated.")
-                except Exception as exc:
-                    log.warn(f"UI update failed: {exc}")
-                finally:
+                _refresh_free_plan_cache("create", cloud, payload, log)
+            applied = _apply_cloud_artifacts(
+                remote_root=settings.PI_HA_CONFIG_DIR,
+                artifacts=response.get("artifacts") if isinstance(response, dict) else None,
+                deletes=response.get("deletes") if isinstance(response, dict) else None,
+                log=log,
+            )
+            ui_payload = response.get("ui") if isinstance(response, dict) else None
+            if isinstance(ui_payload, dict):
+                dashboard_yaml = ui_payload.get("main_dashboard_yaml")
+                dashboard_path = ui_payload.get("dashboard_path") or "dashboard-hausie/0"
+                if not dashboard_yaml:
+                    dash_file = ui_payload.get("main_dashboard_file")
+                    if dash_file:
+                        resolved = dash_file if dash_file.startswith("/") else f"{settings.PI_HA_CONFIG_DIR.rstrip('/')}/{dash_file}"
+                        dashboard_yaml = applied.get(resolved)
+                        if not dashboard_yaml:
+                            log.warn(f"UI update skipped: dashboard YAML not found in applied artifacts ({resolved}).")
+                if not settings.HA_UI_USERNAME or not settings.HA_UI_PASSWORD:
+                    log.warn("UI update skipped: HA_UI_USERNAME/HA_UI_PASSWORD not set.")
+                elif not dashboard_yaml:
+                    log.warn("UI update skipped: dashboard YAML content missing.")
+                else:
+                    log.start("Updating dashboard via UI.")
+                    autom = DashboardUpdater(
+                        base_url=settings.HA_REST_URL.rsplit("/api", 1)[0],
+                        username=settings.HA_UI_USERNAME,
+                        password=settings.HA_UI_PASSWORD,
+                        headless=True,
+                        storage_state_path=None,
+                    )
                     try:
-                        autom.close()
-                    except Exception:
-                        pass
-        else:
-            log.warn("UI update skipped: cloud response missing 'ui' payload.")
-        _reload_services(ha, log)
-        _sync_voice_exposure(ha, response if isinstance(response, dict) else None, log)
-        _apply_plan_badge(ha, response.get("plan_badge") if isinstance(response, dict) else None)
-        _refresh_license_state_from_cloud(settings, log)
-        enabled = _turn_on_user_helpers(ha)
-        if enabled:
-            log.ok(f"User helpers enabled: {enabled}.")
+                        autom.write_yaml_to_ui(dashboard_path, dashboard_yaml)
+                        log.ok("Dashboard UI updated.")
+                    except Exception as exc:
+                        log.warn(f"UI update failed: {exc}")
+                    finally:
+                        try:
+                            autom.close()
+                        except Exception:
+                            pass
+            else:
+                log.warn("UI update skipped: cloud response missing 'ui' payload.")
+            _reload_services(ha, log)
+            _sync_voice_exposure(ha, response if isinstance(response, dict) else None, log)
+            _apply_plan_badge(ha, response.get("plan_badge") if isinstance(response, dict) else None)
+            _refresh_license_state_from_cloud(settings, log)
+            enabled = _turn_on_user_helpers(ha)
+            if enabled:
+                log.ok(f"User helpers enabled: {enabled}.")
+
+
+def _run_create_hausie(*, force_full: bool = False, plan_override: str | None = None) -> None:
+    _run_sync_inventory(force_full=force_full, plan_override=plan_override, manage_activity=True)
 
 
 def _run_rebuild_hausie() -> None:
     log = get_logger("addon")
-    with log.script("rebuild_hausie"):
-        settings = Settings()
-        ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
-        helper_snapshot = _snapshot_rebuild_helper_values(ha, _ha_config_root(), log)
-        state = load_device_state()
-        last_plan = str(state.get("last_plan") or "").strip().lower()
-        last_version = str(state.get("last_addon_version") or "").strip()
-        current_license = _sync_license_state_from_cloud(settings, log, force=True)
-        current_plan = str(current_license.get("plan") or "").strip() or _resolve_subscription_plan(settings)
-        current_version = _resolve_addon_version()
-        plan = _resolve_remote_rebuild_plan(
-            settings,
-            state=state,
-            current_plan=current_plan,
-            current_version=current_version,
-        )
-        if plan is None:
-            plan = _resolve_local_rebuild_plan(
+    with _workflow_activity("Rebuilding Hausie", manage_lock=True):
+        with log.script("rebuild_hausie"):
+            settings = Settings()
+            ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
+            helper_snapshot = _snapshot_rebuild_helper_values(ha, _ha_config_root(), log)
+            state = load_device_state()
+            last_plan = str(state.get("last_plan") or "").strip().lower()
+            last_version = str(state.get("last_addon_version") or "").strip()
+            current_license = _sync_license_state_from_cloud(settings, log, force=True)
+            current_plan = str(current_license.get("plan") or "").strip() or _resolve_subscription_plan(settings)
+            current_version = _resolve_addon_version()
+            plan = _resolve_remote_rebuild_plan(
+                settings,
+                state=state,
                 current_plan=current_plan,
                 current_version=current_version,
-                last_plan=last_plan,
-                last_version=last_version,
             )
-        steps = _normalize_rebuild_steps(plan.get("execution_plan"))
-        source = str(plan.get("source") or "unknown")
-        reason = str(plan.get("reason") or "unknown")
-        log.start(f"Using {source} rebuild plan ({reason}): {', '.join(steps)}.")
-        _execute_rebuild_steps(steps, log)
-        _restore_rebuild_helper_values(ha, helper_snapshot, log)
-        final_plan = str(plan.get("plan") or current_plan or "").strip() or None
-        _update_rebuild_state(state, plan=final_plan, version=current_version)
+            if plan is None:
+                plan = _resolve_local_rebuild_plan(
+                    current_plan=current_plan,
+                    current_version=current_version,
+                    last_plan=last_plan,
+                    last_version=last_version,
+                )
+            steps = _normalize_rebuild_steps(plan.get("execution_plan"))
+            source = str(plan.get("source") or "unknown")
+            reason = str(plan.get("reason") or "unknown")
+            log.start(f"Using {source} rebuild plan ({reason}): {', '.join(steps)}.")
+            _execute_rebuild_steps(steps, log)
+            _restore_rebuild_helper_values(ha, helper_snapshot, log)
+            final_plan = str(plan.get("plan") or current_plan or "").strip() or None
+            _update_rebuild_state(state, plan=final_plan, version=current_version)
 
 
-def _run_create_base(*, force_full: bool = False, plan_override: str | None = None) -> None:
+def _run_create_base(
+    *,
+    force_full: bool = False,
+    plan_override: str | None = None,
+    manage_activity: bool = True,
+) -> None:
     log = get_logger("addon")
-    with log.script("create_base"):
-        settings = Settings()
-        if not settings.HAUSIE_CLOUD_URL:
-            raise RuntimeError("HAUSIE_CLOUD_URL es requerido para generar assets en cloud.")
-        ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
-        log.start("Fetching Home Assistant snapshot.")
-        ha.fetch_all(include_users=True)
-        raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
-        labels = ha.fetch_labels()
-        computed_force_full = False
-        try:
-            states = ha.get_states()
-            computed_force_full = not any(
-                isinstance(state, dict) and state.get("entity_id") == "input_text.hausie_plan_text"
-                for state in states or []
-            )
-        except Exception:
+    with _workflow_activity("Applying base configuration", manage_lock=manage_activity):
+        with log.script("create_base"):
+            settings = Settings()
+            if not settings.HAUSIE_CLOUD_URL:
+                raise RuntimeError("HAUSIE_CLOUD_URL es requerido para generar assets en cloud.")
+            ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
+            log.start("Fetching Home Assistant snapshot.")
+            ha.fetch_all(include_users=True)
+            raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
+            labels = ha.fetch_labels()
             computed_force_full = False
-        device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
-        current_license = _sync_license_state_from_cloud(settings, log, force=True)
-        current_plan = str(current_license.get("plan") or "").strip() or _resolve_subscription_plan(settings) or ""
-        payload = {
-            "areas": raw.get("areas", []),
-            "devices": raw.get("devices", []),
-            "entities": raw.get("entities", []),
-            "services": raw.get("services", []),
-            "users": raw.get("users", []),
-            "labels": labels,
-            "force_full": bool(force_full or computed_force_full),
-            "current_plan": current_plan,
-            "license_status": str(current_license.get("license_status") or "").strip(),
-        }
-        if plan_override:
-            payload["plan_override"] = str(plan_override).strip()
-        if device_id:
-            payload["device_id"] = device_id
-        log.start("Requesting base assets from cloud.")
-        cloud = CloudClient(
-            base_url=settings.HAUSIE_CLOUD_URL,
-            token=settings.HAUSIE_CLOUD_TOKEN,
-            timeout_s=settings.HAUSIE_CLOUD_TIMEOUT,
-            create_hausie_timeout_s=settings.HAUSIE_CLOUD_CREATE_HAUSIE_TIMEOUT,
-        )
-        response = cloud.request_base_assets(payload)
-        if str(plan_override or "").strip().lower() == "plan 1":
-            _save_free_plan_bundle("base", response if isinstance(response, dict) else {}, log)
-        else:
-            _refresh_free_plan_cache("base", cloud, payload, log)
-        log.start("Applying cloud artifacts to Home Assistant config.")
-        _apply_cloud_artifacts(
-            remote_root=settings.PI_HA_CONFIG_DIR,
-            artifacts=response.get("artifacts") if isinstance(response, dict) else None,
-            deletes=response.get("deletes") if isinstance(response, dict) else None,
-            log=log,
-        )
-        root = _ha_config_root()
-        _ensure_plan_text_helper(root, response.get("plan_badge") if isinstance(response, dict) else None)
-        _ensure_remote_support_helper(root)
-        if settings.PI_CONFIG_PATH:
-            log.start("Updating configuration.yaml.")
-            config = ConfigManager(
-                pi_sender=None,
-                config_path=settings.PI_CONFIG_PATH,
-                require_remote=False,
+            try:
+                states = ha.get_states()
+                computed_force_full = not any(
+                    isinstance(state, dict) and state.get("entity_id") == "input_text.hausie_plan_text"
+                    for state in states or []
+                )
+            except Exception:
+                computed_force_full = False
+            device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
+            current_license = _sync_license_state_from_cloud(settings, log, force=True)
+            current_plan = _normalize_plan_id(current_license.get("plan"), "") or _resolve_subscription_plan(settings) or ""
+            payload = {
+                "areas": raw.get("areas", []),
+                "devices": raw.get("devices", []),
+                "entities": raw.get("entities", []),
+                "services": raw.get("services", []),
+                "users": raw.get("users", []),
+                "labels": labels,
+                "force_full": bool(force_full or computed_force_full),
+                "current_plan": current_plan,
+                "license_status": str(current_license.get("license_status") or "").strip(),
+            }
+            if plan_override:
+                payload["plan_override"] = str(plan_override).strip()
+            if device_id:
+                payload["device_id"] = device_id
+            log.start("Requesting base assets from cloud.")
+            cloud = CloudClient(
+                base_url=settings.HAUSIE_CLOUD_URL,
+                token=settings.HAUSIE_CLOUD_TOKEN,
+                timeout_s=settings.HAUSIE_CLOUD_TIMEOUT,
+                create_hausie_timeout_s=settings.HAUSIE_CLOUD_CREATE_HAUSIE_TIMEOUT,
             )
-            config.sync_config_dashboard()
-        log.start("Reloading Home Assistant services.")
-        _reload_services(ha, log)
-        _apply_plan_badge(ha, response.get("plan_badge") if isinstance(response, dict) else None)
-        _refresh_license_state_from_cloud(settings, log)
-        enabled = _turn_on_user_helpers(ha)
-        if enabled:
-            log.ok(f"User helpers enabled: {enabled}.")
+            response = cloud.request_base_assets(payload)
+            if _normalize_plan_id(plan_override, "") == "plan_1":
+                _save_free_plan_bundle("base", response if isinstance(response, dict) else {}, log)
+            else:
+                _refresh_free_plan_cache("base", cloud, payload, log)
+            log.start("Applying cloud artifacts to Home Assistant config.")
+            _apply_cloud_artifacts(
+                remote_root=settings.PI_HA_CONFIG_DIR,
+                artifacts=response.get("artifacts") if isinstance(response, dict) else None,
+                deletes=response.get("deletes") if isinstance(response, dict) else None,
+                log=log,
+            )
+            root = _ha_config_root()
+            _ensure_plan_text_helper(root, response.get("plan_badge") if isinstance(response, dict) else None)
+            _ensure_remote_support_helper(root)
+            if settings.PI_CONFIG_PATH:
+                log.start("Updating configuration.yaml.")
+                config = ConfigManager(
+                    pi_sender=None,
+                    config_path=settings.PI_CONFIG_PATH,
+                    require_remote=False,
+                )
+                config.sync_config_dashboard()
+            log.start("Reloading Home Assistant services.")
+            _reload_services(ha, log)
+            _apply_plan_badge(ha, response.get("plan_badge") if isinstance(response, dict) else None)
+            _refresh_license_state_from_cloud(settings, log)
+            enabled = _turn_on_user_helpers(ha)
+            if enabled:
+                log.ok(f"User helpers enabled: {enabled}.")
 
 
 def _run_restart_hausie() -> None:
     log = get_logger("addon")
-    with log.script("restart_hausie"):
-        _cleanup_base_assets()
-        _cleanup_hausie_assets()
-        _run_create_base(force_full=True)
-        _run_create_hausie(force_full=True)
-        settings = Settings()
-        state = load_device_state()
-        _update_rebuild_state(
-            state,
-            plan=_resolve_subscription_plan(settings),
-            version=_resolve_addon_version(),
-        )
+    with _workflow_activity("Restarting Hausie", manage_lock=True):
+        with log.script("restart_hausie"):
+            _cleanup_base_assets()
+            _cleanup_hausie_assets()
+            _run_create_base(force_full=True, manage_activity=False)
+            _run_sync_inventory(force_full=True, manage_activity=False)
+            settings = Settings()
+            state = load_device_state()
+            _update_rebuild_state(
+                state,
+                plan=_resolve_subscription_plan(settings),
+                version=_resolve_addon_version(),
+            )
 
 
 def _license_time_expired(license_state: dict[str, Any]) -> bool:
@@ -1848,37 +1922,38 @@ def _run_apply_plan(
     allow_local_free_fallback: bool = False,
 ) -> None:
     log = get_logger("addon")
-    with log.script("apply_plan"):
-        settings = Settings()
-        ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
-        current_license = load_license_state()
-        source_plan = str(current_license.get("plan") or "").strip() or "plan 1"
-        target = str(target_plan or "").strip().lower() or "plan 1"
-        _capture_and_persist_helper_snapshot(ha, source_plan=source_plan, target_plan=target, log=log)
-        _cleanup_base_assets()
-        _cleanup_hausie_assets()
-        if target == "plan 1" and allow_local_free_fallback:
-            _apply_cached_plan_cache("base", log)
-            _apply_cached_plan_cache("create", log)
-        elif target == "plan 1":
-            _run_create_base(force_full=True, plan_override="plan 1")
-            _run_create_hausie(force_full=True, plan_override="plan 1")
-        else:
-            _run_create_base(force_full=True)
-            _run_create_hausie(force_full=True)
-        _restore_persisted_helper_snapshot(ha, log)
-        if license_payload:
-            final_state = _store_license_payload(license_payload, log)
-        else:
-            final_state = load_license_state()
-            final_state["plan"] = target
-            save_license_state(final_state)
-        rebuild_state = load_device_state()
-        _update_rebuild_state(
-            rebuild_state,
-            plan=str(final_state.get("plan") or target),
-            version=_resolve_addon_version(),
-        )
+    with _workflow_activity("Applying plan", manage_lock=True):
+        with log.script("apply_plan"):
+            settings = Settings()
+            ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
+            current_license = load_license_state()
+            source_plan = _normalize_plan_id(current_license.get("plan"))
+            target = _normalize_plan_id(target_plan)
+            _capture_and_persist_helper_snapshot(ha, source_plan=source_plan, target_plan=target, log=log)
+            _cleanup_base_assets()
+            _cleanup_hausie_assets()
+            if target == "plan_1" and allow_local_free_fallback:
+                _apply_cached_plan_cache("base", log)
+                _apply_cached_plan_cache("create", log)
+            elif target == "plan_1":
+                _run_create_base(force_full=True, plan_override="plan_1", manage_activity=False)
+                _run_sync_inventory(force_full=True, plan_override="plan_1", manage_activity=False)
+            else:
+                _run_create_base(force_full=True, plan_override=target, manage_activity=False)
+                _run_sync_inventory(force_full=True, plan_override=target, manage_activity=False)
+            _restore_persisted_helper_snapshot(ha, log)
+            if license_payload:
+                final_state = _store_license_payload(license_payload, log)
+            else:
+                final_state = load_license_state()
+                final_state["plan"] = target
+                save_license_state(final_state)
+            rebuild_state = load_device_state()
+            _update_rebuild_state(
+                rebuild_state,
+                plan=_normalize_plan_id(final_state.get("plan"), target),
+                version=_resolve_addon_version(),
+            )
 
 
 def _run_create_test() -> None:
@@ -2454,8 +2529,8 @@ def _normalize_license_payload(payload: dict[str, Any] | None) -> dict[str, Any]
     source = payload if isinstance(payload, dict) else {}
     normalized = {
         "schema_version": 1,
-        "plan": str(source.get("plan") or "").strip() or None,
-        "base_plan": str(source.get("base_plan") or "").strip() or None,
+        "plan": _normalize_plan_id(source.get("plan"), "") or None,
+        "base_plan": _normalize_plan_id(source.get("base_plan"), "") or None,
         "license_status": str(source.get("license_status") or "").strip() or None,
         "subscription_status": str(source.get("subscription_status") or "").strip() or None,
         "billing_cycle": str(source.get("billing_cycle") or "").strip() or None,
@@ -2478,7 +2553,7 @@ def _store_license_payload(payload: dict[str, Any] | None, log) -> dict[str, Any
     current = load_license_state()
     current.update({k: v for k, v in normalized.items() if v is not None or k in {"portal_message", "addon_message"}})
     if not current.get("plan"):
-        current["plan"] = "plan 1"
+        current["plan"] = "plan_1"
     if not current.get("license_status"):
         current["license_status"] = "active"
     save_license_state(current)
@@ -2508,13 +2583,13 @@ def _save_free_plan_bundle(kind: str, response: dict[str, Any], log) -> None:
 
 def _refresh_free_plan_cache(kind: str, cloud: CloudClient, payload: dict[str, Any], log) -> None:
     free_payload = dict(payload or {})
-    free_payload["plan_override"] = "plan 1"
+    free_payload["plan_override"] = "plan_1"
     free_payload["force_full"] = True
     try:
         if kind == "base":
             response = cloud.request_base_assets(free_payload)
         else:
-            response = cloud.request_create_hausie(free_payload)
+            response = cloud.request_sync_inventory(free_payload)
     except Exception as exc:
         log.warn(f"Free-plan cache refresh failed for {kind}: {exc}")
         return
@@ -2678,9 +2753,9 @@ class _AddonHandler(BaseHTTPRequestHandler):
                     return
 
             try:
-                _run_create_hausie()
+                _run_sync_inventory()
             except Exception as exc:
-                self._send_json(500, {"error": f"create_hausie failed: {exc}"})
+                self._send_json(500, {"error": f"sync_inventory failed: {exc}"})
                 return
 
             self._send_json(
@@ -2821,7 +2896,19 @@ class _AddonHandler(BaseHTTPRequestHandler):
                 self._send_json(401, {"error": "Unauthorized"})
                 return
             try:
-                _run_create_hausie()
+                _run_sync_inventory()
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+                return
+            self._send_json(200, {"ok": True})
+            return
+
+        if path == "/run/sync_inventory":
+            if not self._authorize():
+                self._send_json(401, {"error": "Unauthorized"})
+                return
+            try:
+                _run_sync_inventory()
             except Exception as exc:
                 self._send_json(500, {"error": str(exc)})
                 return

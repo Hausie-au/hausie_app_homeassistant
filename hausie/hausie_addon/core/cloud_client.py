@@ -40,6 +40,19 @@ class CloudClient:
             raise RuntimeError(f"Cloud create-hausie failed {resp.status_code}: {resp.text}")
         return resp.json() if resp.content else {}
 
+    def request_sync_inventory(self, payload: dict) -> dict:
+        url = f"{self.base_url}/api/addon/sync-inventory"
+        body = dict(payload or {})
+        resp = requests.post(
+            url,
+            headers=self.headers,
+            json=body,
+            timeout=self.create_hausie_timeout_s,
+        )
+        if resp.status_code // 100 != 2:
+            raise RuntimeError(f"Cloud sync-inventory failed {resp.status_code}: {resp.text}")
+        return resp.json() if resp.content else {}
+
     def request_test_assets(self, payload: dict) -> dict:
         url = f"{self.base_url}/api/addon/test-assets"
         body = dict(payload or {})

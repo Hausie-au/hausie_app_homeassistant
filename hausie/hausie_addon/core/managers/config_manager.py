@@ -67,6 +67,7 @@ class ConfigManager:
         "cleanup_hausie",
         "create_base",
         "create_hausie",
+        "sync_inventory",
         "rebuild_hausie",
         "restart_hausie",
         "create_test",
@@ -82,6 +83,7 @@ class ConfigManager:
         "cleanup_hausie",
         "create_base",
         "create_hausie",
+        "sync_inventory",
         "create_test",
         "test_popup_wait",
     }
@@ -282,6 +284,14 @@ class ConfigManager:
             create_hausie_url = f"{addon_url.rstrip('/')}/run/create_hausie"
             existing["create_hausie"] = {
                 "url": create_hausie_url,
+                "method": "POST",
+                "content_type": "application/json",
+                "payload": "{}",
+                "timeout": 180,
+            }
+            sync_inventory_url = f"{addon_url.rstrip('/')}/run/sync_inventory"
+            existing["sync_inventory"] = {
+                "url": sync_inventory_url,
                 "method": "POST",
                 "content_type": "application/json",
                 "payload": "{}",
