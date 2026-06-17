@@ -1651,7 +1651,6 @@ def _run_sync_inventory(
             labels = ha.fetch_labels()
             device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
             addon_slug = (os.getenv("HOSTNAME") or os.getenv("HAUSIE_ADDON_SLUG") or "").strip()
-            addon_slug = (os.getenv("HOSTNAME") or os.getenv("HAUSIE_ADDON_SLUG") or "").strip()
             current_license = _sync_license_state_from_cloud(settings, log, force=True)
             current_plan = _normalize_plan_id(current_license.get("plan"), "") or _resolve_subscription_plan(settings) or ""
             payload = {
@@ -1801,6 +1800,7 @@ def _run_create_base(
             except Exception:
                 computed_force_full = False
             device_id = os.getenv("HAUSIE_DEVICE_ID", "").strip() or settings.HAUSIE_DEVICE_ID
+            addon_slug = (os.getenv("HOSTNAME") or os.getenv("HAUSIE_ADDON_SLUG") or "").strip()
             current_license = _sync_license_state_from_cloud(settings, log, force=True)
             current_plan = _normalize_plan_id(current_license.get("plan"), "") or _resolve_subscription_plan(settings) or ""
             payload = {
@@ -1817,7 +1817,7 @@ def _run_create_base(
             if addon_slug:
                 payload["addon_slug"] = addon_slug
             if plan_override:
-                payload["plan_override"] = str(plan_override).strip()
+                payload["plan_override"] = _normalize_plan_id(plan_override)
             if device_id:
                 payload["device_id"] = device_id
             log.start("Requesting base assets from cloud.")
