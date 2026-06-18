@@ -400,6 +400,7 @@ _BASE_HELPER_FILES = [
 _BASE_HELPER_KEEP_FILES = {
     ("input_button", "hausie_input_button_general.yaml"),
     ("input_button", "input_button_general.yaml"),
+    ("input_boolean", "hausie_input_boolean_general.yaml"),
     ("input_boolean", "hausie_input_boolean.dashboards.yaml"),
     ("input_boolean", "input_boolean.dashboards.yaml"),
     ("input_text", "hausie_input_text.dashboards.yaml"),
@@ -756,7 +757,9 @@ def _sync_local_config() -> None:
     config_path = os.getenv("PI_CONFIG_PATH", "/homeassistant/configuration.yaml").strip()
     if not config_path:
         return
+    helper_created = False
     try:
+        helper_created = _ensure_remote_support_helper(_ha_config_root())
         manager = ConfigManager(
             pi_sender=None,
             config_path=config_path,
@@ -766,6 +769,18 @@ def _sync_local_config() -> None:
         get_logger("config").ok("configuration.yaml synced (local).")
     except Exception as exc:
         get_logger("config").warn(f"configuration.yaml sync failed: {exc}")
+        return
+
+    if not helper_created:
+        return
+    ha = _resolve_ha_client()
+    if not ha:
+        return
+    try:
+        ha.call_service("input_boolean", "reload", {})
+        get_logger("config").ok("Reloaded input_boolean helpers after restoring remote support toggle.")
+    except Exception as exc:
+        get_logger("config").warn(f"input_boolean.reload failed after restoring remote support toggle: {exc}")
 
 
 def _resolve_ha_client() -> HAClient | None:
@@ -2379,7 +2394,7 @@ def _ensure_plan_text_helper(root: Path, plan_badge: dict | None) -> None:
         helper_path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
 
 
-def _ensure_remote_support_helper(root: Path) -> None:
+def _ensure_remote_support_helper(root: Path) -> bool:
     helpers_dir = root / "helpers" / "input_boolean"
     helpers_dir.mkdir(parents=True, exist_ok=True)
     helper_path = helpers_dir / "hausie_input_boolean_general.yaml"
@@ -2390,12 +2405,13 @@ def _ensure_remote_support_helper(root: Path) -> None:
     if not isinstance(doc, dict):
         doc = {}
     if "allow_remote_support" in doc:
-        return
+        return False
     doc["allow_remote_support"] = {
         "name": "Remote Support",
         "initial": "off",
     }
     helper_path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return True
 
 
 def _turn_on_user_helpers(ha: HAClient) -> int:

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.48
+
+- Preserve the remote support helper during cleanup flows and restore it on add-on startup so `input_boolean.allow_remote_support` does not become unavailable in the config dashboard.
+
 ## 0.2.47
 
 - Detect Home Assistant inventory changes in the add-on and automatically run `sync_inventory` so newly added devices are pushed to Hausie Cloud without waiting for a manual refresh.
