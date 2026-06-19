@@ -737,11 +737,15 @@ def _start_inventory_monitor() -> None:
                 if not last_signature:
                     state["last_inventory_signature"] = current_signature
                     state["last_inventory_baselined_at"] = int(time.time())
+                    state.pop("inventory_change_pending", None)
                     save_device_state(state)
                     log.info("Inventory signature missing; stored startup baseline without auto-sync.")
                 elif current_signature != last_signature:
-                    log.start("Inventory change detected; syncing to cloud.")
-                    _run_sync_inventory(manage_activity=True)
+                    state["last_inventory_signature"] = current_signature
+                    state["last_inventory_changed_at"] = int(time.time())
+                    state.pop("inventory_change_pending", None)
+                    save_device_state(state)
+                    log.info("Inventory change detected; updated local baseline without auto-sync.")
             except RuntimeError as exc:
                 log.info(f"Inventory monitor skipped: {exc}")
             except Exception as exc:
@@ -1866,6 +1870,7 @@ def _run_sync_inventory(
             state = load_device_state()
             state["last_inventory_signature"] = _build_inventory_signature(raw, labels)
             state["last_inventory_synced_at"] = int(time.time())
+            state.pop("inventory_change_pending", None)
             save_device_state(state)
             enabled = _turn_on_user_helpers(ha)
             if enabled:

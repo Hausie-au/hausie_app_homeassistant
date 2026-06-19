@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.51
+
+- Stop auto-syncing inventory when the Home Assistant inventory changes after boot.
+- Keep inventory-change detection local only by updating the stored baseline without triggering cloud generation or showing a visual notice.
+
 ## 0.2.50
 
 - Stop auto-running `sync_inventory` on add-on startup when no previous inventory signature exists.
