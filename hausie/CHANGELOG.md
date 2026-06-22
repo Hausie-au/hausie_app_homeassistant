@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.55
+
+- Accept cloud subscription payloads that return `tier` instead of `plan` so the add-on keeps the correct licensed plan instead of falling back to `plan_1`.
+
 ## 0.2.54
 
 - Stop tracking the generated `__pycache__/addon_server.cpython-310.pyc` file so local Python bytecode no longer shows up as a pending Git change.

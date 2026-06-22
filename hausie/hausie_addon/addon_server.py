@@ -2714,9 +2714,12 @@ def _restore_persisted_helper_snapshot(ha: HAClient, log) -> int:
 
 def _normalize_license_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     source = payload if isinstance(payload, dict) else {}
+    resolved_plan = source.get("plan")
+    if not resolved_plan:
+        resolved_plan = source.get("tier")
     normalized = {
         "schema_version": 1,
-        "plan": _normalize_plan_id(source.get("plan"), "") or None,
+        "plan": _normalize_plan_id(resolved_plan, "") or None,
         "base_plan": _normalize_plan_id(source.get("base_plan"), "") or None,
         "license_status": str(source.get("license_status") or "").strip() or None,
         "subscription_status": str(source.get("subscription_status") or "").strip() or None,
