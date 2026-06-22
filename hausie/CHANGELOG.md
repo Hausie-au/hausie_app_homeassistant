@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.54
+
+- Stop tracking the generated `__pycache__/addon_server.cpython-310.pyc` file so local Python bytecode no longer shows up as a pending Git change.
+
 ## 0.2.53
 
 - Run long-lived Hausie add-on actions such as refresh, repair, restart, and base rebuild in the background so the UI no longer gets stuck waiting for a long HTTP response.
