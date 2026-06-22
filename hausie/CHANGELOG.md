@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.52
+
+- Treat expected Home Assistant restart disconnects as transient so rebuild logs do not report false restart failures.
+- Reduce remote-support warning noise while Home Assistant is temporarily unavailable during restart.
+- Ignore client disconnects cleanly when the add-on finishes responding after a long rebuild request.
+
 ## 0.2.51
 
 - Stop auto-syncing inventory when the Home Assistant inventory changes after boot.
