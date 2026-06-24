@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.58
+
+- Wait for rebuilt helper entities to exist again after `Repair Hausie` before restoring their values, so blinds toggle and selected-day helpers are restored after Home Assistant fully reloads them.
+
 ## 0.2.57
 
 - Restore persisted helper values only after Home Assistant comes back from the final `Repair Hausie` restart so blinds automation helpers such as enabled toggles and selected days are not reset by the restart.

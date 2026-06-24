@@ -1598,6 +1598,50 @@ def _wait_for_home_assistant_ready(ha: HAClient, log, *, timeout_s: int = 180, i
     return False
 
 
+def _wait_for_helper_entities_ready(
+    ha: HAClient,
+    snapshot: dict[str, dict[str, Any]],
+    log,
+    *,
+    timeout_s: int = 120,
+    interval_s: int = 5,
+) -> bool:
+    """Wait until the helper entities captured before rebuild exist again after restart."""
+    target_entities = sorted(
+        entity_id
+        for entity_id, item in (snapshot or {}).items()
+        if isinstance(item, dict) and str(item.get("domain") or item.get("helper_type") or "").strip()
+    )
+    if not target_entities:
+        return True
+    remaining = set(target_entities)
+    deadline = time.time() + max(5, timeout_s)
+    while time.time() < deadline:
+        try:
+            states = ha.get_states()
+            live_entities = {
+                str(state.get("entity_id") or "").strip()
+                for state in (states or [])
+                if isinstance(state, dict) and str(state.get("entity_id") or "").strip()
+            }
+            remaining = {entity_id for entity_id in target_entities if entity_id not in live_entities}
+            if not remaining:
+                log.ok(f"All helper entities are available again ({len(target_entities)}).")
+                return True
+        except Exception as exc:
+            log.info(f"Waiting for helper entities after restart: {exc}")
+        if remaining:
+            preview = ", ".join(sorted(list(remaining))[:5])
+            suffix = " ..." if len(remaining) > 5 else ""
+            log.info(f"Waiting for helper entities to load: {preview}{suffix}")
+        time.sleep(max(1, interval_s))
+    if remaining:
+        preview = ", ".join(sorted(list(remaining))[:10])
+        suffix = " ..." if len(remaining) > 10 else ""
+        log.warn(f"Timed out waiting for helper entities after rebuild: {preview}{suffix}")
+    return False
+
+
 def _apply_cloud_artifacts(
     *,
     remote_root: str,
@@ -1966,6 +2010,7 @@ def _run_rebuild_hausie() -> None:
             _restart_home_assistant(ha, log)
             if helper_snapshot:
                 _wait_for_home_assistant_ready(ha, log)
+                _wait_for_helper_entities_ready(ha, helper_snapshot, log)
                 _restore_rebuild_helper_values(ha, helper_snapshot, log)
 
 
