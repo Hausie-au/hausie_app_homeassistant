@@ -271,8 +271,8 @@ sections:
         name: Hausie App
         icon: mdi:home-assistant
         tap_action:
-          action: navigate
-          navigation_path: /config/app/c5bb2897_hausie/info
+          action: url
+          url_path: /config/app/c5bb2897_hausie/info
       - show_name: true
         show_icon: true
         type: button

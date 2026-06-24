@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.59
+
+- Change the `Hausie App` button in the configuration dashboard to use a direct internal URL action so it reliably opens `/config/app/c5bb2897_hausie/info`.
+
 ## 0.2.58
 
 - Wait for rebuilt helper entities to exist again after `Repair Hausie` before restoring their values, so blinds toggle and selected-day helpers are restored after Home Assistant fully reloads them.
