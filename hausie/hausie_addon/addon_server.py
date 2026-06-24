@@ -1583,6 +1583,21 @@ def _restart_home_assistant(ha: HAClient, log) -> None:
         log.warn(f"Home Assistant restart skipped: {exc}")
 
 
+def _wait_for_home_assistant_ready(ha: HAClient, log, *, timeout_s: int = 180, interval_s: int = 5) -> bool:
+    """Wait until Home Assistant responds again after a restart request."""
+    deadline = time.time() + max(5, timeout_s)
+    while time.time() < deadline:
+        try:
+            ha.get_states()
+            log.ok("Home Assistant is available again.")
+            return True
+        except Exception as exc:
+            log.info(f"Waiting for Home Assistant to come back: {exc}")
+            time.sleep(max(1, interval_s))
+    log.warn("Timed out waiting for Home Assistant to become available after rebuild.")
+    return False
+
+
 def _apply_cloud_artifacts(
     *,
     remote_root: str,
@@ -1946,10 +1961,12 @@ def _run_rebuild_hausie() -> None:
             reason = str(plan.get("reason") or "unknown")
             log.start(f"Using {source} rebuild plan ({reason}): {', '.join(steps)}.")
             _execute_rebuild_steps(steps, log)
-            _restore_rebuild_helper_values(ha, helper_snapshot, log)
             final_plan = str(plan.get("plan") or current_plan or "").strip() or None
             _update_rebuild_state(state, plan=final_plan, version=current_version)
             _restart_home_assistant(ha, log)
+            if helper_snapshot:
+                _wait_for_home_assistant_ready(ha, log)
+                _restore_rebuild_helper_values(ha, helper_snapshot, log)
 
 
 def _run_create_base(

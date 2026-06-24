@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.57
+
+- Restore persisted helper values only after Home Assistant comes back from the final `Repair Hausie` restart so blinds automation helpers such as enabled toggles and selected days are not reset by the restart.
+
 ## 0.2.56
 
 - Remove the `Add Zigbee Device` button from the configuration dashboard while keeping the underlying Zigbee onboarding logic available in the add-on.
