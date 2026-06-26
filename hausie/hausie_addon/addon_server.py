@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+import requests
 import yaml
 import websocket
 
@@ -47,6 +48,7 @@ from .orchestration.new_device_dashboard import (
     resolve_config_dashboard_path,
     upsert_new_device_button,
 )
+from .constants import Labels
 from .settings import Settings
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -447,6 +449,301 @@ _CONFIG_DASHBOARD_FILENAME = "hausie_configuration_dashboard.yaml"
 _TEST_DASHBOARD_FILENAME = "hausie_test_dashboard.yaml"
 _MAIN_DASHBOARD_FILENAME = "hausie_dashboard.yaml"
 
+_PAIRING_LOCK = threading.Lock()
+_PAIRING_THREAD: threading.Thread | None = None
+_PAIRING_LABEL_OPTIONS = [
+    Labels.BLIND,
+    Labels.BUTTON,
+    Labels.COOLING,
+    Labels.HEATING,
+    Labels.MOTION,
+    Labels.PLANT,
+    Labels.PRIMARY_LIGHT,
+    Labels.SECONDARY_LIGHT,
+    Labels.TEMPERATURE,
+]
+
+
+def _new_pairing_state() -> dict[str, Any]:
+    return {
+        "status": "idle",
+        "message": "Ready to start ZHA pairing.",
+        "active": False,
+        "started_at": 0.0,
+        "ends_at": 0.0,
+        "duration_s": 90,
+        "zha_permit_seconds": 90,
+        "areas": [],
+        "devices": {},
+        "selected_device_id": "",
+        "completed_device_id": "",
+        "error": "",
+    }
+
+
+_PAIRING_STATE: dict[str, Any] = _new_pairing_state()
+
+
+def _pairing_plan_rank(plan_id: str) -> int:
+    normalized = _normalize_plan_id(plan_id, "")
+    match = re.search(r"plan_(\d+)", normalized)
+    return int(match.group(1)) if match else 0
+
+
+def _pairing_is_unlocked() -> bool:
+    state = load_license_state()
+    plan = _normalize_plan_id(state.get("plan"), "plan_1")
+    return _pairing_plan_rank(plan) >= 2
+
+
+def _pairing_state_payload() -> dict[str, Any]:
+    with _PAIRING_LOCK:
+        devices = list((_PAIRING_STATE.get("devices") or {}).values())
+        devices.sort(key=lambda item: (item.get("status") != "ready", item.get("discovered_at") or 0))
+        return {
+            "status": _PAIRING_STATE.get("status") or "idle",
+            "message": _PAIRING_STATE.get("message") or "",
+            "active": bool(_PAIRING_STATE.get("active")),
+            "started_at": _PAIRING_STATE.get("started_at") or 0,
+            "ends_at": _PAIRING_STATE.get("ends_at") or 0,
+            "duration_s": _PAIRING_STATE.get("duration_s") or 90,
+            "areas": list(_PAIRING_STATE.get("areas") or []),
+            "devices": devices,
+            "selected_device_id": _PAIRING_STATE.get("selected_device_id") or "",
+            "completed_device_id": _PAIRING_STATE.get("completed_device_id") or "",
+            "error": _PAIRING_STATE.get("error") or "",
+            "labels": list(_PAIRING_LABEL_OPTIONS),
+            "plan": _normalize_plan_id(load_license_state().get("plan"), "plan_1"),
+            "plan_unlocked": _pairing_is_unlocked(),
+        }
+
+
+def _pairing_area_names(raw: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for area in raw.get("areas") or []:
+        if not isinstance(area, dict):
+            continue
+        name = str(area.get("name") or "").strip()
+        if not name:
+            continue
+        if slugify(name) == "system":
+            continue
+        names.append(name)
+    return sorted(set(names))
+
+
+def _pairing_pick_device_name(device: dict[str, Any], device_id: str) -> str:
+    return str(device.get("name_by_user") or device.get("name") or device_id or "New device").strip()
+
+
+def _pairing_infer_labels(entity_ids: list[str]) -> list[str]:
+    inferred: list[str] = []
+    normalized = [str(entity_id or "").strip().lower() for entity_id in entity_ids if str(entity_id or "").strip()]
+    for entity_id in normalized:
+        domain = entity_id.split(".", 1)[0]
+        if domain == "light":
+            inferred.append(Labels.PRIMARY_LIGHT)
+        if domain == "cover":
+            inferred.append(Labels.BLIND)
+        if domain == "button":
+            inferred.append(Labels.BUTTON)
+        if domain in {"binary_sensor", "sensor"} and any(
+            marker in entity_id for marker in ("occupancy", "motion", "presence", "pir", "moving")
+        ):
+            inferred.append(Labels.MOTION)
+        if domain == "sensor" and "temperature" in entity_id:
+            inferred.append(Labels.TEMPERATURE)
+    deduped: list[str] = []
+    for label in inferred:
+        if label not in deduped:
+            deduped.append(label)
+    return deduped
+
+
+def _capture_pairing_snapshot(settings: Settings) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
+    ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
+    ha.fetch_all(include_users=False)
+    raw = json.loads(Path(ha.raw_file).read_text(encoding="utf-8"))
+    entities_by_device: dict[str, list[dict[str, Any]]] = {}
+    for entity in raw.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        device_id = str(entity.get("device_id") or "").strip()
+        if not device_id:
+            continue
+        entities_by_device.setdefault(device_id, []).append(entity)
+    return raw, entities_by_device
+
+
+def _refresh_pairing_devices(raw: dict[str, Any], entities_by_device: dict[str, list[dict[str, Any]]], *, baseline_ids: set[str]) -> None:
+    now = time.time()
+    devices = raw.get("devices") or []
+    area_map = _resolve_area_map(raw)
+    with _PAIRING_LOCK:
+        _PAIRING_STATE["areas"] = _pairing_area_names(raw)
+        pairing_devices = _PAIRING_STATE.setdefault("devices", {})
+        for device in devices:
+            if not isinstance(device, dict):
+                continue
+            device_id = str(device.get("id") or "").strip()
+            if not device_id or device_id in baseline_ids:
+                continue
+            area_name = area_map.get(str(device.get("area_id") or "").strip(), "")
+            if area_name and slugify(area_name) == "system":
+                continue
+            entity_rows = entities_by_device.get(device_id) or []
+            entity_ids = sorted(
+                {
+                    str(row.get("entity_id") or "").strip()
+                    for row in entity_rows
+                    if str(row.get("entity_id") or "").strip()
+                }
+            )
+            entity_signature = "|".join(entity_ids)
+            candidate = pairing_devices.get(device_id)
+            if not isinstance(candidate, dict):
+                candidate = {
+                    "device_id": device_id,
+                    "name": _pairing_pick_device_name(device, device_id),
+                    "suggested_name": _pairing_pick_device_name(device, device_id),
+                    "manufacturer": str(device.get("manufacturer") or "").strip(),
+                    "model": str(device.get("model") or "").strip(),
+                    "entity_ids": entity_ids,
+                    "entity_count": len(entity_ids),
+                    "entity_signature": entity_signature,
+                    "discovered_at": now,
+                    "stable_since": now,
+                    "status": "configuring",
+                    "area_name": area_name,
+                    "suggested_labels": _pairing_infer_labels(entity_ids),
+                }
+                pairing_devices[device_id] = candidate
+            else:
+                if candidate.get("entity_signature") != entity_signature:
+                    candidate["entity_signature"] = entity_signature
+                    candidate["stable_since"] = now
+                candidate["name"] = _pairing_pick_device_name(device, device_id)
+                candidate["suggested_name"] = candidate.get("suggested_name") or candidate["name"]
+                candidate["manufacturer"] = str(device.get("manufacturer") or "").strip()
+                candidate["model"] = str(device.get("model") or "").strip()
+                candidate["entity_ids"] = entity_ids
+                candidate["entity_count"] = len(entity_ids)
+                candidate["area_name"] = area_name
+                candidate["suggested_labels"] = _pairing_infer_labels(entity_ids)
+            if entity_ids and now - float(candidate.get("stable_since") or now) >= 5:
+                candidate["status"] = "ready"
+            else:
+                candidate["status"] = "configuring"
+            candidate["updated_at"] = now
+        ready_candidates = [
+            device_id
+            for device_id, candidate in pairing_devices.items()
+            if isinstance(candidate, dict) and candidate.get("status") == "ready"
+        ]
+        if ready_candidates:
+            _PAIRING_STATE["status"] = "ready"
+            _PAIRING_STATE["message"] = "New device ready to configure."
+            if not _PAIRING_STATE.get("selected_device_id"):
+                _PAIRING_STATE["selected_device_id"] = ready_candidates[0]
+        elif pairing_devices:
+            _PAIRING_STATE["status"] = "configuring"
+            _PAIRING_STATE["message"] = "Device found. Waiting for Home Assistant to finish configuring it."
+        else:
+            _PAIRING_STATE["status"] = "searching"
+            _PAIRING_STATE["message"] = "Searching for new ZHA devices..."
+
+
+def _pairing_monitor_loop(duration_s: int) -> None:
+    log = get_logger("pairing")
+    baseline_ids: set[str] = set()
+    try:
+        settings = Settings()
+        raw, entities_by_device = _capture_pairing_snapshot(settings)
+        baseline_ids = {
+            str(device.get("id") or "").strip()
+            for device in (raw.get("devices") or [])
+            if isinstance(device, dict) and str(device.get("id") or "").strip()
+        }
+        with _PAIRING_LOCK:
+            _PAIRING_STATE.clear()
+            _PAIRING_STATE.update(_new_pairing_state())
+            _PAIRING_STATE.update(
+                {
+                    "status": "searching",
+                    "message": "Searching for new ZHA devices...",
+                    "active": True,
+                    "started_at": time.time(),
+                    "ends_at": time.time() + duration_s,
+                    "duration_s": duration_s,
+                    "zha_permit_seconds": duration_s,
+                    "areas": _pairing_area_names(raw),
+                }
+            )
+        ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
+        ha.call_service("zha", "permit", {"duration": duration_s})
+        log.ok(f"ZHA pairing started for {duration_s}s.")
+        while True:
+            with _PAIRING_LOCK:
+                active = bool(_PAIRING_STATE.get("active"))
+                ends_at = float(_PAIRING_STATE.get("ends_at") or 0)
+            if not active or time.time() >= ends_at:
+                break
+            raw, entities_by_device = _capture_pairing_snapshot(settings)
+            _refresh_pairing_devices(raw, entities_by_device, baseline_ids=baseline_ids)
+            time.sleep(2)
+        raw, entities_by_device = _capture_pairing_snapshot(settings)
+        _refresh_pairing_devices(raw, entities_by_device, baseline_ids=baseline_ids)
+        with _PAIRING_LOCK:
+            _PAIRING_STATE["active"] = False
+            if not (_PAIRING_STATE.get("devices") or {}):
+                _PAIRING_STATE["status"] = "idle"
+                _PAIRING_STATE["message"] = "No new devices were found during this scan."
+            elif _PAIRING_STATE.get("status") == "configuring":
+                _PAIRING_STATE["message"] = "Device found. Wait a few more seconds and refresh if needed."
+    except Exception as exc:
+        with _PAIRING_LOCK:
+            _PAIRING_STATE["active"] = False
+            _PAIRING_STATE["status"] = "error"
+            _PAIRING_STATE["error"] = str(exc)
+            _PAIRING_STATE["message"] = f"Pairing failed: {exc}"
+        log.error(f"Pairing monitor failed: {exc}")
+
+
+def _start_pairing_session(duration_s: int = 90) -> dict[str, Any]:
+    global _PAIRING_THREAD
+    if not _pairing_is_unlocked():
+        with _PAIRING_LOCK:
+            _PAIRING_STATE.clear()
+            _PAIRING_STATE.update(_new_pairing_state())
+            _PAIRING_STATE["status"] = "upgrade_required"
+            _PAIRING_STATE["message"] = "Upgrade Hausie to add new devices by yourself."
+        return _pairing_state_payload()
+    with _PAIRING_LOCK:
+        if _PAIRING_THREAD and _PAIRING_THREAD.is_alive():
+            return _pairing_state_payload()
+        _PAIRING_STATE.clear()
+        _PAIRING_STATE.update(_new_pairing_state())
+        _PAIRING_STATE["status"] = "searching"
+        _PAIRING_STATE["message"] = "Starting ZHA pairing..."
+        _PAIRING_STATE["active"] = True
+    _PAIRING_THREAD = threading.Thread(
+        target=_pairing_monitor_loop,
+        args=(max(30, min(300, int(duration_s or 90))),),
+        name="hausie-pairing",
+        daemon=True,
+    )
+    _PAIRING_THREAD.start()
+    return _pairing_state_payload()
+
+
+def _stop_pairing_session() -> dict[str, Any]:
+    with _PAIRING_LOCK:
+        _PAIRING_STATE["active"] = False
+        if _PAIRING_STATE.get("status") not in {"completed", "error"}:
+            _PAIRING_STATE["status"] = "idle"
+            _PAIRING_STATE["message"] = "Pairing stopped."
+    return _pairing_state_payload()
+
 def _resolve_local_ha_root() -> Path | None:
     env_root = os.getenv("HAUSIE_LOCAL_HA_ROOT", "").strip()
     if env_root:
@@ -788,6 +1085,76 @@ def _start_inventory_monitor() -> None:
     _INVENTORY_MONITOR_THREAD.start()
 
 
+def _supervisor_request(method: str, path: str) -> dict[str, Any]:
+    token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+    if not token:
+        return {}
+    url = f"http://supervisor{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    resp = requests.request(method, url, headers=headers, timeout=15)
+    if resp.status_code // 100 != 2:
+        return {}
+    try:
+        payload = resp.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_pairing_ingress_path() -> str:
+    data = _supervisor_request("GET", "/addons/self/info")
+    body = data.get("data") if isinstance(data.get("data"), dict) else data
+    ingress_base = ""
+    if isinstance(body, dict):
+        ingress_base = str(
+            body.get("ingress_url")
+            or body.get("ingress_entry")
+            or body.get("ingress_path")
+            or ""
+        ).strip()
+    if ingress_base:
+        return f"{ingress_base.rstrip('/')}/pairing"
+    return "/config-dashboard/new-devices"
+
+
+def _patch_add_device_shortcut(log) -> None:
+    dashboard_path = resolve_config_dashboard_path()
+    if not dashboard_path.exists() or not _pairing_is_unlocked():
+        return
+    try:
+        doc = yaml.safe_load(dashboard_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        log.warn(f"Add Device shortcut patch skipped: {exc}")
+        return
+    if not isinstance(doc, dict):
+        return
+    target_path = _resolve_pairing_ingress_path()
+    updated = False
+    for view in doc.get("views") or []:
+        if not isinstance(view, dict) or str(view.get("path") or "").strip() != "main":
+            continue
+        for section in view.get("sections") or []:
+            if not isinstance(section, dict):
+                continue
+            for card in section.get("cards") or []:
+                if not isinstance(card, dict) or str(card.get("name") or "").strip() != "Add Device":
+                    continue
+                tap_action = card.get("tap_action") if isinstance(card.get("tap_action"), dict) else {}
+                if tap_action.get("action") == "url" and str(tap_action.get("url_path") or "").strip() == target_path:
+                    return
+                card["tap_action"] = {
+                    "action": "url",
+                    "url_path": target_path,
+                }
+                updated = True
+    if updated:
+        dashboard_path.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        log.ok(f"Patched Add Device shortcut to {target_path}.")
+
+
 def _sync_local_config() -> None:
     if os.getenv("HAUSIE_SYNC_CONFIG_ON_START", "true").strip().lower() in {"0", "false", "no"}:
         return
@@ -803,6 +1170,7 @@ def _sync_local_config() -> None:
             require_remote=False,
         )
         manager.sync_config_dashboard()
+        _patch_add_device_shortcut(get_logger("config"))
         get_logger("config").ok("configuration.yaml synced (local).")
     except Exception as exc:
         get_logger("config").warn(f"configuration.yaml sync failed: {exc}")
@@ -1502,6 +1870,40 @@ def _update_device_name_area(
         ws.close()
 
 
+def _update_device_labels(
+    *,
+    base_url: str,
+    username: str,
+    password: str,
+    device_id: str,
+    labels: list[str],
+) -> list[str]:
+    applied: list[str] = []
+    cleaned = []
+    for label in labels or []:
+        normalized = str(label or "").strip()
+        if not normalized or normalized.lower() == "none" or normalized in cleaned:
+            continue
+        cleaned.append(normalized)
+    if not cleaned:
+        return applied
+    headless_flag = os.getenv("HA_PLAYWRIGHT_HEADLESS", "").strip().lower()
+    headless = headless_flag not in {"0", "false", "no"}
+    updater = DeviceLabelUpdater(
+        base_url=base_url,
+        username=username,
+        password=password,
+        headless=headless,
+    )
+    try:
+        for label in cleaned:
+            if updater.update_device_label(device_id, label):
+                applied.append(label)
+    finally:
+        updater.close()
+    return applied
+
+
 def _reload_services(ha: HAClient, log) -> None:
     services = [
         ("homeassistant", "reload_core_config"),
@@ -1957,6 +2359,7 @@ def _run_sync_inventory(
                 log.warn("UI update skipped: cloud response missing 'ui' payload.")
             _reload_services(ha, log)
             _reload_browser_frontends(ha, log)
+            _patch_add_device_shortcut(log)
             _sync_voice_exposure(ha, response if isinstance(response, dict) else None, log)
             _apply_plan_badge(ha, response.get("plan_badge") if isinstance(response, dict) else None)
             _refresh_license_state_from_cloud(settings, log)
@@ -2093,6 +2496,7 @@ def _run_create_base(
                 config.sync_config_dashboard()
             log.start("Reloading Home Assistant services.")
             _reload_services(ha, log)
+            _patch_add_device_shortcut(log)
             _apply_plan_badge(ha, response.get("plan_badge") if isinstance(response, dict) else None)
             _refresh_license_state_from_cloud(settings, log)
             enabled = _turn_on_user_helpers(ha)
@@ -2848,6 +3252,502 @@ def _refresh_free_plan_cache(kind: str, cloud: CloudClient, payload: dict[str, A
     _save_free_plan_bundle(kind, response, log)
 
 
+def _confirm_pairing_device(payload: dict[str, Any]) -> dict[str, Any]:
+    if not _pairing_is_unlocked():
+        raise RuntimeError("Upgrade Hausie to add new devices by yourself.")
+    device_id = str(payload.get("device_id") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    area = str(payload.get("area") or "").strip()
+    labels = payload.get("labels") if isinstance(payload.get("labels"), list) else []
+    normalized_labels = []
+    for item in labels:
+        label_name = str(item or "").strip()
+        if label_name and label_name not in normalized_labels:
+            normalized_labels.append(label_name)
+    if not device_id:
+        raise ValueError("device_id is required.")
+    if not name:
+        raise ValueError("name is required.")
+    if not area:
+        raise ValueError("area is required.")
+    if not normalized_labels:
+        raise ValueError("at least one label is required.")
+    ha = _resolve_ha_client()
+    if not ha:
+        raise RuntimeError("HA_TOKEN is required.")
+    with _PAIRING_LOCK:
+        _PAIRING_STATE["status"] = "saving"
+        _PAIRING_STATE["message"] = "Saving device configuration and refreshing Hausie..."
+        _PAIRING_STATE["error"] = ""
+    resolved_device_id = _update_device_name_area(
+        ha_ws_url=ha.ha_url_ws,
+        token=ha.token,
+        device_id=device_id,
+        name=name,
+        area_name=area,
+    )
+    applied_labels = _update_device_labels(
+        base_url=ha.ha_url_rest.rsplit("/api", 1)[0],
+        username=os.getenv("HA_UI_USERNAME", ""),
+        password=os.getenv("HA_UI_PASSWORD", ""),
+        device_id=resolved_device_id,
+        labels=normalized_labels,
+    )
+    _run_sync_inventory()
+    with _PAIRING_LOCK:
+        _PAIRING_STATE["active"] = False
+        _PAIRING_STATE["status"] = "completed"
+        _PAIRING_STATE["message"] = "Device added successfully."
+        _PAIRING_STATE["completed_device_id"] = resolved_device_id
+        _PAIRING_STATE["selected_device_id"] = resolved_device_id
+        candidate = (_PAIRING_STATE.get("devices") or {}).get(device_id)
+        if isinstance(candidate, dict):
+            candidate["status"] = "saved"
+            candidate["name"] = name
+            candidate["area_name"] = area
+            candidate["applied_labels"] = applied_labels
+    return {
+        "ok": True,
+        "device_id": resolved_device_id,
+        "applied_labels": applied_labels,
+    }
+
+
+def _render_pairing_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Hausie Device Pairing</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f1117;
+        --panel: #171b23;
+        --panel-2: #1f2632;
+        --muted: #9aa4b2;
+        --text: #f3f6fb;
+        --accent: #49a6ff;
+        --accent-2: #0078d4;
+        --success: #3fb950;
+        --warning: #ffb020;
+        --danger: #ff6b6b;
+        --border: rgba(255, 255, 255, 0.08);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: linear-gradient(180deg, #0f1117 0%, #121824 100%);
+        color: var(--text);
+      }
+      .page {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 18px 14px 32px;
+      }
+      .header h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+      .header p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 16px;
+        margin-top: 14px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+      }
+      .status {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .status-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 0 0 0 rgba(73, 166, 255, 0.45);
+      }
+      .status-dot.searching, .status-dot.configuring { animation: pulse 1.4s infinite; }
+      .status-dot.ready { background: var(--success); }
+      .status-dot.completed { background: var(--success); }
+      .status-dot.error, .status-dot.upgrade_required { background: var(--danger); }
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      button {
+        border: 0;
+        border-radius: 14px;
+        min-height: 48px;
+        font-size: 15px;
+        font-weight: 600;
+        padding: 0 16px;
+        cursor: pointer;
+      }
+      .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white; }
+      .secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+      .ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+      .upgrade {
+        border-left: 4px solid var(--warning);
+        padding-left: 14px;
+      }
+      .device-list { display: grid; gap: 10px; margin-top: 14px; }
+      .device-card {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 14px;
+        cursor: pointer;
+      }
+      .device-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(73,166,255,0.35); }
+      .device-card h3 { margin: 0 0 6px; font-size: 17px; }
+      .meta { color: var(--muted); font-size: 13px; line-height: 1.45; }
+      .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .pill {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 12px;
+      }
+      .pill.ready { background: rgba(63,185,80,0.12); border-color: rgba(63,185,80,0.35); }
+      .pill.configuring { background: rgba(255,176,32,0.1); border-color: rgba(255,176,32,0.35); }
+      .form-grid { display: grid; gap: 12px; margin-top: 14px; }
+      label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+      input, select {
+        width: 100%;
+        min-height: 46px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: #0f141d;
+        color: var(--text);
+        padding: 0 12px;
+        font-size: 15px;
+      }
+      .checkbox-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .checkbox {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: #0f141d;
+      }
+      .checkbox input { width: 18px; min-height: 18px; }
+      .hint, .small { color: var(--muted); font-size: 13px; line-height: 1.5; }
+      .hidden { display: none !important; }
+      .footer-note { margin-top: 14px; color: var(--muted); font-size: 12px; text-align: center; }
+      @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(73, 166, 255, 0.45); }
+        70% { box-shadow: 0 0 0 12px rgba(73, 166, 255, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(73, 166, 255, 0); }
+      }
+      @media (max-width: 520px) {
+        .actions { grid-template-columns: 1fr; }
+        .checkbox-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="header">
+        <h1>Add Device</h1>
+        <p>Pair a new ZHA device locally, choose its room, add Hausie labels, and refresh your setup without depending on the cloud.</p>
+      </section>
+
+      <section class="panel" id="upgradePanel">
+        <div class="upgrade">
+          <strong>Upgrade required</strong>
+          <p class="hint" style="margin:8px 0 0;">Upgrade Hausie to add new devices by yourself.</p>
+        </div>
+      </section>
+
+      <section class="panel" id="wizardPanel">
+        <div class="status">
+          <div class="status-dot" id="statusDot"></div>
+          <div>
+            <div id="statusTitle" style="font-weight:700;">Ready</div>
+            <div class="small" id="statusMessage">Ready to start ZHA pairing.</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="startBtn">Start ZHA pairing</button>
+          <button class="ghost" id="stopBtn">Stop</button>
+        </div>
+        <div class="footer-note">Keep the device in pairing mode while Hausie is searching.</div>
+      </section>
+
+      <section class="panel hidden" id="devicesPanel">
+        <h2 style="margin:0 0 10px; font-size:20px;">New devices found</h2>
+        <div class="device-list" id="deviceList"></div>
+      </section>
+
+      <section class="panel hidden" id="formPanel">
+        <h2 id="formTitle" style="margin:0 0 10px; font-size:20px;">Configure device</h2>
+        <p class="hint" id="formHint" style="margin:0 0 12px;"></p>
+        <div class="form-grid">
+          <div>
+            <label for="deviceName">Name</label>
+            <input id="deviceName" type="text" maxlength="80"/>
+          </div>
+          <div>
+            <label for="deviceArea">Area</label>
+            <select id="deviceArea"></select>
+          </div>
+          <div>
+            <label>Labels</label>
+            <div class="checkbox-grid" id="labelGrid"></div>
+          </div>
+          <button class="primary" id="confirmBtn">Add device</button>
+        </div>
+      </section>
+    </main>
+    <script>
+      const state = {
+        payload: null,
+        selectedId: "",
+      };
+
+      const statusDot = document.getElementById("statusDot");
+      const statusTitle = document.getElementById("statusTitle");
+      const statusMessage = document.getElementById("statusMessage");
+      const wizardPanel = document.getElementById("wizardPanel");
+      const upgradePanel = document.getElementById("upgradePanel");
+      const devicesPanel = document.getElementById("devicesPanel");
+      const formPanel = document.getElementById("formPanel");
+      const deviceList = document.getElementById("deviceList");
+      const formTitle = document.getElementById("formTitle");
+      const formHint = document.getElementById("formHint");
+      const deviceName = document.getElementById("deviceName");
+      const deviceArea = document.getElementById("deviceArea");
+      const labelGrid = document.getElementById("labelGrid");
+      const confirmBtn = document.getElementById("confirmBtn");
+
+      async function request(path, options = {}) {
+        const response = await fetch(path, {
+          headers: { "Content-Type": "application/json" },
+          ...options,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Request failed");
+        return data;
+      }
+
+      function humanStatus(status) {
+        const map = {
+          idle: "Ready",
+          searching: "Searching",
+          configuring: "Configuring",
+          ready: "Ready to configure",
+          saving: "Saving",
+          completed: "Completed",
+          error: "Error",
+          upgrade_required: "Upgrade required",
+        };
+        return map[status] || "Pairing";
+      }
+
+      function renderStatus(payload) {
+        statusDot.className = `status-dot ${payload.status || "idle"}`;
+        statusTitle.textContent = humanStatus(payload.status);
+        statusMessage.textContent = payload.message || "";
+        const locked = !payload.plan_unlocked;
+        upgradePanel.classList.toggle("hidden", !locked);
+        wizardPanel.classList.toggle("hidden", locked);
+      }
+
+      function ensureAreaOptions(payload) {
+        const current = deviceArea.value;
+        deviceArea.innerHTML = "";
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Select area";
+        deviceArea.appendChild(placeholder);
+        for (const area of payload.areas || []) {
+          const option = document.createElement("option");
+          option.value = area;
+          option.textContent = area;
+          if (area === current) option.selected = true;
+          deviceArea.appendChild(option);
+        }
+      }
+
+      function renderLabelOptions(payload, selectedLabels) {
+        labelGrid.innerHTML = "";
+        for (const label of payload.labels || []) {
+          const wrapper = document.createElement("label");
+          wrapper.className = "checkbox";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = label;
+          input.checked = selectedLabels.includes(label);
+          const text = document.createElement("span");
+          text.textContent = label.replaceAll("_", " ");
+          wrapper.appendChild(input);
+          wrapper.appendChild(text);
+          labelGrid.appendChild(wrapper);
+        }
+      }
+
+      function renderDevices(payload) {
+        const devices = payload.devices || [];
+        devicesPanel.classList.toggle("hidden", devices.length === 0);
+        deviceList.innerHTML = "";
+        for (const device of devices) {
+          const card = document.createElement("button");
+          card.type = "button";
+          card.className = `device-card ${state.selectedId === device.device_id ? "selected" : ""}`;
+          card.onclick = () => {
+            state.selectedId = device.device_id;
+            render(payload);
+          };
+          const title = document.createElement("h3");
+          title.textContent = device.name || device.device_id;
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          const parts = [];
+          if (device.manufacturer) parts.push(device.manufacturer);
+          if (device.model) parts.push(device.model);
+          if (device.entity_count) parts.push(`${device.entity_count} entities`);
+          meta.textContent = parts.join(" • ");
+          const pills = document.createElement("div");
+          pills.className = "pill-row";
+          const statePill = document.createElement("span");
+          statePill.className = `pill ${device.status || "configuring"}`;
+          statePill.textContent = humanStatus(device.status);
+          pills.appendChild(statePill);
+          for (const label of device.suggested_labels || []) {
+            const pill = document.createElement("span");
+            pill.className = "pill";
+            pill.textContent = label.replaceAll("_", " ");
+            pills.appendChild(pill);
+          }
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(pills);
+          deviceList.appendChild(card);
+        }
+      }
+
+      function renderForm(payload) {
+        const devices = payload.devices || [];
+        const selected = devices.find((item) => item.device_id === state.selectedId)
+          || devices.find((item) => item.status === "ready")
+          || null;
+        if (!selected || selected.status !== "ready") {
+          formPanel.classList.add("hidden");
+          return;
+        }
+        state.selectedId = selected.device_id;
+        formPanel.classList.remove("hidden");
+        formTitle.textContent = selected.name || selected.device_id;
+        const suggested = (selected.suggested_labels || []).map((item) => item.replaceAll("_", " "));
+        formHint.textContent = suggested.length
+          ? `This device seems like: ${suggested.join(", ")}.`
+          : "Select the labels that describe this device.";
+        ensureAreaOptions(payload);
+        deviceName.value = deviceName.value && deviceName.dataset.deviceId === selected.device_id
+          ? deviceName.value
+          : (selected.suggested_name || selected.name || "");
+        deviceName.dataset.deviceId = selected.device_id;
+        if (!deviceArea.value) {
+          deviceArea.value = selected.area_name || "";
+        }
+        const preservedLabels = deviceName.dataset.deviceId === selected.device_id
+          ? Array.from(labelGrid.querySelectorAll('input[type="checkbox"]:checked')).map((el) => el.value)
+          : [];
+        const selectedLabels = preservedLabels.length
+          ? preservedLabels
+          : Array.from(new Set(selected.suggested_labels || []));
+        renderLabelOptions(payload, selectedLabels);
+      }
+
+      function render(payload) {
+        state.payload = payload;
+        renderStatus(payload);
+        renderDevices(payload);
+        renderForm(payload);
+      }
+
+      async function refreshStatus() {
+        try {
+          const payload = await request("/pairing/status");
+          if (!state.selectedId && payload.selected_device_id) {
+            state.selectedId = payload.selected_device_id;
+          }
+          render(payload);
+        } catch (error) {
+          statusDot.className = "status-dot error";
+          statusTitle.textContent = "Error";
+          statusMessage.textContent = error.message;
+        }
+      }
+
+      document.getElementById("startBtn").addEventListener("click", async () => {
+        try {
+          const payload = await request("/pairing/start", { method: "POST", body: JSON.stringify({ duration: 90 }) });
+          state.selectedId = "";
+          render(payload);
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+
+      document.getElementById("stopBtn").addEventListener("click", async () => {
+        try {
+          const payload = await request("/pairing/stop", { method: "POST", body: "{}" });
+          render(payload);
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+
+      confirmBtn.addEventListener("click", async () => {
+        if (!state.payload) return;
+        const labels = Array.from(labelGrid.querySelectorAll('input[type="checkbox"]:checked')).map((el) => el.value);
+        try {
+          confirmBtn.disabled = true;
+          await request("/pairing/confirm", {
+            method: "POST",
+            body: JSON.stringify({
+              device_id: state.selectedId,
+              name: deviceName.value.trim(),
+              area: deviceArea.value.trim(),
+              labels,
+            }),
+          });
+          await refreshStatus();
+        } catch (error) {
+          alert(error.message);
+        } finally {
+          confirmBtn.disabled = false;
+        }
+      });
+
+      refreshStatus();
+      setInterval(refreshStatus, 2000);
+    </script>
+  </body>
+</html>"""
+
+
 class _AddonHandler(BaseHTTPRequestHandler):
     def _send_json(self, code: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -2884,9 +3784,48 @@ class _AddonHandler(BaseHTTPRequestHandler):
         return token == expected
 
     def do_POST(self) -> None:
-        path = self.path.rstrip("/")
+        path = self.path.split("?", 1)[0].rstrip("/")
         log = get_logger("addon")
         log.info(f"HTTP POST {path}")
+        if path == "/pairing/start":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            duration = payload.get("duration") if isinstance(payload, dict) else None
+            try:
+                response = _start_pairing_session(int(duration or 90))
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+                return
+            self._send_json(200, response)
+            return
+
+        if path == "/pairing/stop":
+            self._send_json(200, _stop_pairing_session())
+            return
+
+        if path == "/pairing/confirm":
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "Invalid JSON"})
+                return
+            try:
+                result = _confirm_pairing_device(payload if isinstance(payload, dict) else {})
+            except ValueError as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+                return
+            self._send_json(200, result)
+            return
+
         if path == "/new_device":
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
@@ -2963,6 +3902,7 @@ class _AddonHandler(BaseHTTPRequestHandler):
             payload_device_id = str(payload.get("device_id") or "").strip()
             payload_name = str(payload.get("name") or "").strip()
             payload_label = str(payload.get("label") or "").strip()
+            payload_labels = payload.get("labels") if isinstance(payload.get("labels"), list) else []
             payload_area = str(payload.get("area") or "").strip()
             if payload_device_id:
                 inputs["device_id"] = payload_device_id
@@ -2972,6 +3912,13 @@ class _AddonHandler(BaseHTTPRequestHandler):
                 inputs["label"] = payload_label
             if payload_area:
                 inputs["area"] = payload_area
+            requested_labels = []
+            for item in payload_labels:
+                label_name = str(item or "").strip()
+                if label_name:
+                    requested_labels.append(label_name)
+            if not requested_labels and inputs.get("label"):
+                requested_labels = [inputs["label"]]
 
             device_id = inputs.get("device_id") or ""
             if not device_id:
@@ -2990,22 +3937,17 @@ class _AddonHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": f"device update failed: {exc}"})
                 return
 
-            label_updated = False
-            if inputs.get("label"):
+            applied_labels: list[str] = []
+            if requested_labels:
                 try:
                     base_url = ha.ha_url_rest.rsplit("/api", 1)[0]
-                    headless_flag = os.getenv("HA_PLAYWRIGHT_HEADLESS", "").strip().lower()
-                    headless = headless_flag not in {"0", "false", "no"}
-                    label_updater = DeviceLabelUpdater(
+                    applied_labels = _update_device_labels(
                         base_url=base_url,
                         username=os.getenv("HA_UI_USERNAME", ""),
                         password=os.getenv("HA_UI_PASSWORD", ""),
-                        headless=headless,
+                        device_id=resolved_device_id,
+                        labels=requested_labels,
                     )
-                    try:
-                        label_updated = label_updater.update_device_label(resolved_device_id, inputs["label"])
-                    finally:
-                        label_updater.close()
                 except Exception as exc:
                     self._send_json(500, {"error": f"label update failed: {exc}"})
                     return
@@ -3021,7 +3963,8 @@ class _AddonHandler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "device_id": device_id,
-                    "label_updated": label_updated,
+                    "label_updated": bool(applied_labels),
+                    "applied_labels": applied_labels,
                 },
             )
             return
@@ -3272,7 +4215,13 @@ class _AddonHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Not found"})
 
     def do_GET(self) -> None:
-        path = self.path.rstrip("/")
+        path = self.path.split("?", 1)[0].rstrip("/")
+        if path == "/pairing":
+            self._send_text(200, _render_pairing_html(), "text/html; charset=utf-8")
+            return
+        if path == "/pairing/status":
+            self._send_json(200, _pairing_state_payload())
+            return
         if path in {"", "/"}:
             log_path = os.getenv("HAUSIE_LOG_FILE", "/data/hausie_addon.log")
             try:

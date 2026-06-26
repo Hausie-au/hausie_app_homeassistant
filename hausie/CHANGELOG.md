@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.60
+
+- Add a mobile-first local ZHA pairing wizard in the add-on ingress UI so plan 2+ homes can start pairing, wait for devices to finish configuring, assign room and labels, and refresh Hausie from the Raspberry Pi.
+- Patch the `Add Device` dashboard shortcut locally to the add-on pairing wizard ingress path for unlocked plans.
+- Allow the device-save flow to apply multiple labels in one pass.
+
 ## 0.2.59
 
 - Change the `Hausie App` button in the configuration dashboard to use a direct internal URL action so it reliably opens `/config/app/c5bb2897_hausie/info`.
