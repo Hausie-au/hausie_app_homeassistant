@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.70
+
+- Remove runtime credentials, pairing, Cloud endpoint, and Tailscale fields from the add-on configuration screen; setup and credentials ingress flows now manage those values.
+- Migrate legacy Home Assistant runtime credentials from add-on options into the private local device state when present.
+
 ## 0.2.69
 
 - Update generated Hausie App and ingress navigation paths to the definitive `5d76f103_hausie` Home Assistant add-on slug.

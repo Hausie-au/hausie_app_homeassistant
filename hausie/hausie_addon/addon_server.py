@@ -93,13 +93,9 @@ def _start_background_workflow(action_name: str, runner) -> None:
     thread.start()
 
 
-def _load_addon_options() -> None:
-    option_keys = {
-        "ha_token",
-        "hausie_cloud_url",
-        "pairing_code",
-        "tailscale_ip",
-    }
+def _migrate_legacy_addon_options() -> None:
+    """Preserve HA credentials from pre-ingress add-on configuration once."""
+    option_keys = {"ha_token", "ha_ui_username", "ha_ui_password"}
     candidate_paths: list[Path] = [Path("/data/options.json")]
     addon_configs = Path("/addon_configs")
     if addon_configs.exists():
@@ -123,20 +119,16 @@ def _load_addon_options() -> None:
             break
     if not data:
         return
-    mappings = {
-        "ha_token": "HA_TOKEN",
-        "hausie_cloud_url": "HAUSIE_CLOUD_URL",
-        "pairing_code": "HAUSIE_PAIRING_CODE",
-        "tailscale_ip": "HAUSIE_TAILSCALE_IP",
-    }
-    for option_key, env_key in mappings.items():
-        if option_key in data:
-            os.environ[env_key] = str(data.get(option_key) or "").strip()
     if options_path and not os.getenv("HAUSIE_DEVICE_STATE_PATH"):
         os.environ["HAUSIE_DEVICE_STATE_PATH"] = str(options_path.parent / "hausie_device.json")
+    persist_ha_runtime_credentials(
+        ha_token=str(data.get("ha_token") or "").strip() or None,
+        ha_ui_username=str(data.get("ha_ui_username") or "").strip() or None,
+        ha_ui_password=str(data.get("ha_ui_password") or "").strip() or None,
+    )
 
 
-_load_addon_options()
+_migrate_legacy_addon_options()
 
 
 def _read_secret_file(path: str | None) -> str | None:
