@@ -1121,20 +1121,24 @@ def _resolve_hausie_app_path(suffix: str) -> str:
     return f"/config/app/{_resolve_self_addon_slug()}/{suffix.lstrip('/')}"
 
 
+def _resolve_hausie_app_page_path() -> str:
+    return f"/app/{_resolve_self_addon_slug()}"
+
+
 def _resolve_pairing_ingress_path() -> str:
     return _resolve_hausie_app_path("ingress/pairing")
 
 
 def _resolve_credentials_ingress_path() -> str:
-    return _resolve_hausie_app_path("ingress/credentials")
+    return _resolve_hausie_app_page_path()
 
 
 def _resolve_setup_ingress_path() -> str:
-    return _resolve_hausie_app_path("ingress/setup")
+    return _resolve_hausie_app_page_path()
 
 
 def _resolve_hausie_app_info_path() -> str:
-    return _resolve_hausie_app_path("info")
+    return _resolve_hausie_app_page_path()
 
 
 def _normalize_ingress_path(value: str | None) -> str:

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.75
+
+- Open the Hausie App setup through Home Assistant's standard `/app/<slug>` route instead of a manually constructed ingress URL.
+
 ## 0.2.74
 
 - Fix ingress setup, pairing, and credentials pages so their requests remain inside the Home Assistant ingress proxy.
