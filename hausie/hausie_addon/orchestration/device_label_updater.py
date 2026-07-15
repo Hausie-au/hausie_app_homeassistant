@@ -28,17 +28,21 @@ class DeviceLabelUpdater:
         self.username = username
         self.password = password
         self.headless = headless
+        self._log = get_logger("new_device")
+        self._log.start("Starting Playwright driver.")
         self.playwright = sync_playwright().start()
+        self._log.ok("Playwright driver started.")
         self.browser = None
         self.context = None
         self.page = None
-        self._log = get_logger("new_device")
 
     def _launch_browser(self) -> None:
         if self.page is not None:
             return
         self._ensure_playwright_browser()
-        self.browser = self.playwright.chromium.launch(headless=self.headless)
+        self._log.start("Launching Playwright browser.")
+        self.browser = self.playwright.chromium.launch(headless=self.headless, timeout=30_000)
+        self._log.ok("Playwright browser launched.")
         self.context = self.browser.new_context()
         self.page = self.context.new_page()
 
@@ -68,6 +72,7 @@ class DeviceLabelUpdater:
             subprocess.run(
                 [sys.executable, "-m", "playwright", "install", "chromium"],
                 check=True,
+                timeout=300,
             )
             self._log.ok("Playwright Chromium installed.")
         except Exception as exc:

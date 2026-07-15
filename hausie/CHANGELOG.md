@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.78
+
+- Prevent setup from remaining indefinitely in progress when Playwright installation stalls by applying a five-minute installer timeout.
+- Log Playwright driver and browser startup milestones so setup logs identify the exact blocked stage.
+
 ## 0.2.77
 
 - Add separate local credential fields for `hausie_admin` and `hausie_support_user` in the setup and credentials screens.

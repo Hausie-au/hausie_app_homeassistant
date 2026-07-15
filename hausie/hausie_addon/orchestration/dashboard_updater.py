@@ -26,11 +26,13 @@ class DashboardUpdater:
         self.headless = headless
         self.storage_state_path = None  # force new session each time
 
+        self._log = get_logger("ui")
+        self._log.start("Starting Playwright driver.")
         self.playwright = sync_playwright().start()
+        self._log.ok("Playwright driver started.")
         self.browser = None
         self.context = None
         self.page = None
-        self._log = get_logger("ui")
 
     # -----------------------
     # Navigation / Session
@@ -39,7 +41,9 @@ class DashboardUpdater:
         """Start the browser and page if not already open."""
         if self.page is None:
             self._ensure_playwright_browser()
-            self.browser = self.playwright.chromium.launch(headless=self.headless)
+            self._log.start("Launching Playwright browser.")
+            self.browser = self.playwright.chromium.launch(headless=self.headless, timeout=30_000)
+            self._log.ok("Playwright browser launched.")
             self.context = self.browser.new_context()
             self.page = self.context.new_page()
             self.page.on("pageerror", self._log_page_error)
@@ -58,6 +62,7 @@ class DashboardUpdater:
             subprocess.run(
                 [sys.executable, "-m", "playwright", "install", "chromium"],
                 check=True,
+                timeout=300,
             )
             self._log.ok("Playwright Chromium installed.")
         except Exception as exc:
