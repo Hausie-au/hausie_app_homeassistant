@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.76
+
+- Align the local Hausie App setup, pairing, and credentials screens with the shared Hausie visual identity.
+
 ## 0.2.75
 
 - Open the Hausie App setup through Home Assistant's standard `/app/<slug>` route instead of a manually constructed ingress URL.

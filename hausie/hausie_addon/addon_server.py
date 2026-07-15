@@ -3836,34 +3836,39 @@ def _render_pairing_html(ingress_path: str = "") -> str:
     <title>Hausie Device Pairing</title>
     <style>
       :root {
-        color-scheme: dark;
-        --bg: #0f1117;
-        --panel: #171b23;
-        --panel-2: #1f2632;
-        --muted: #9aa4b2;
-        --text: #f3f6fb;
-        --accent: #49a6ff;
-        --accent-2: #0078d4;
-        --success: #3fb950;
-        --warning: #ffb020;
-        --danger: #ff6b6b;
-        --border: rgba(255, 255, 255, 0.08);
+        color-scheme: light;
+        --bg: #f5f5f5;
+        --surface: #ffffff;
+        --surface-tint: #e3edef;
+        --muted: #637277;
+        --text: #0a0a0a;
+        --primary: #00434c;
+        --primary-dark: #00343b;
+        --success: #0d7c1b;
+        --warning: #9a6100;
+        --danger: #b42318;
+        --border: #dfe5e7;
+        --shadow: 0 18px 60px rgba(10, 10, 10, 0.08);
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: linear-gradient(180deg, #0f1117 0%, #121824 100%);
+        min-height: 100vh;
+        font-family: "Poppins", "Avenir Next", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top left, rgba(227, 237, 239, 0.95), transparent 31%), radial-gradient(circle at bottom right, rgba(215, 231, 234, 0.8), transparent 27%), var(--bg);
         color: var(--text);
       }
       .page {
         max-width: 720px;
         margin: 0 auto;
-        padding: 18px 14px 32px;
+        padding: 26px 16px 42px;
       }
+      .eyebrow { margin: 0 0 9px; color: var(--primary); font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
       .header h1 {
         margin: 0 0 8px;
-        font-size: 28px;
+        font-family: "Bai Jamjuree", "Avenir Next", "Segoe UI", sans-serif;
+        font-size: clamp(30px, 8vw, 42px);
+        letter-spacing: -0.03em;
       }
       .header p {
         margin: 0;
@@ -3871,12 +3876,12 @@ def _render_pairing_html(ingress_path: str = "") -> str:
         line-height: 1.5;
       }
       .panel {
-        background: var(--panel);
+        background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 16px;
-        margin-top: 14px;
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+        border-radius: 24px;
+        padding: 20px;
+        margin-top: 16px;
+        box-shadow: var(--shadow);
       }
       .status {
         display: flex;
@@ -3887,8 +3892,8 @@ def _render_pairing_html(ingress_path: str = "") -> str:
         width: 12px;
         height: 12px;
         border-radius: 999px;
-        background: var(--accent);
-        box-shadow: 0 0 0 0 rgba(73, 166, 255, 0.45);
+        background: var(--primary);
+        box-shadow: 0 0 0 0 rgba(0, 67, 76, 0.24);
       }
       .status-dot.searching, .status-dot.configuring { animation: pulse 1.4s infinite; }
       .status-dot.ready { background: var(--success); }
@@ -3902,42 +3907,40 @@ def _render_pairing_html(ingress_path: str = "") -> str:
       }
       button {
         border: 0;
-        border-radius: 14px;
-        min-height: 48px;
+        border-radius: 12px;
+        min-height: 50px;
         font-size: 15px;
         font-weight: 600;
         padding: 0 16px;
         cursor: pointer;
       }
-      .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white; }
-      .secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
-      .ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-      .upgrade {
-        border-left: 4px solid var(--warning);
-        padding-left: 14px;
-      }
+      .primary { background: var(--primary); color: white; box-shadow: 0 1px 2px rgba(0, 67, 76, 0.3); }
+      .primary:hover { background: var(--primary-dark); }
+      .secondary { background: var(--surface-tint); color: var(--primary); border: 1px solid #c8d4d8; }
+      .ghost { background: var(--surface); color: var(--primary); border: 1px solid #c8d4d8; }
+      .upgrade { border-left: 4px solid var(--warning); padding-left: 14px; }
       .device-list { display: grid; gap: 10px; margin-top: 14px; }
       .device-card {
-        background: var(--panel-2);
+        background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 16px;
         padding: 14px;
         cursor: pointer;
       }
-      .device-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(73,166,255,0.35); }
+      .device-card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(0,67,76,0.12); }
       .device-card h3 { margin: 0 0 6px; font-size: 17px; }
       .meta { color: var(--muted); font-size: 13px; line-height: 1.45; }
       .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
       .pill {
-        background: rgba(255,255,255,0.06);
+        background: var(--surface-tint);
         border: 1px solid var(--border);
         color: var(--text);
         border-radius: 999px;
         padding: 6px 10px;
         font-size: 12px;
       }
-      .pill.ready { background: rgba(63,185,80,0.12); border-color: rgba(63,185,80,0.35); }
-      .pill.configuring { background: rgba(255,176,32,0.1); border-color: rgba(255,176,32,0.35); }
+      .pill.ready { background: #e9f7ec; border-color: #b8ddc0; }
+      .pill.configuring { background: #fff5df; border-color: #ead39d; }
       .form-grid { display: grid; gap: 12px; margin-top: 14px; }
       label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
       input, select {
@@ -3945,7 +3948,7 @@ def _render_pairing_html(ingress_path: str = "") -> str:
         min-height: 46px;
         border-radius: 12px;
         border: 1px solid var(--border);
-        background: #0f141d;
+        background: var(--surface);
         color: var(--text);
         padding: 0 12px;
         font-size: 15px;
@@ -3962,16 +3965,16 @@ def _render_pairing_html(ingress_path: str = "") -> str:
         padding: 12px;
         border-radius: 12px;
         border: 1px solid var(--border);
-        background: #0f141d;
+        background: var(--surface);
       }
       .checkbox input { width: 18px; min-height: 18px; }
       .hint, .small { color: var(--muted); font-size: 13px; line-height: 1.5; }
       .hidden { display: none !important; }
       .footer-note { margin-top: 14px; color: var(--muted); font-size: 12px; text-align: center; }
       @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(73, 166, 255, 0.45); }
-        70% { box-shadow: 0 0 0 12px rgba(73, 166, 255, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(73, 166, 255, 0); }
+        0% { box-shadow: 0 0 0 0 rgba(0, 67, 76, 0.24); }
+        70% { box-shadow: 0 0 0 12px rgba(0, 67, 76, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(0, 67, 76, 0); }
       }
       @media (max-width: 520px) {
         .actions { grid-template-columns: 1fr; }
@@ -3982,6 +3985,7 @@ def _render_pairing_html(ingress_path: str = "") -> str:
   <body>
     <main class="page">
       <section class="header">
+        <p class="eyebrow">Hausie local app</p>
         <h1>Add Device</h1>
         <p>Pair a new ZHA device locally, choose its room, add Hausie labels, and refresh your setup without depending on the cloud.</p>
       </section>
@@ -4273,31 +4277,34 @@ def _render_setup_html(ingress_path: str = "") -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>Complete Hausie setup</title>
     <style>
-      :root { color-scheme: dark; --bg:#07111f; --panel:#101d30; --card:#15253c; --text:#f4f7fb; --muted:#a8b7cb; --accent:#39c6f4; --ok:#52d68b; --warn:#ffd166; --danger:#ff7b7b; --border:rgba(255,255,255,.1); }
+      :root { color-scheme:light; --bg:#f5f5f5; --surface:#ffffff; --tint:#e3edef; --text:#0a0a0a; --muted:#637277; --primary:#00434c; --primary-dark:#00343b; --ok:#0d7c1b; --warn:#9a6100; --danger:#b42318; --border:#dfe5e7; --shadow:0 18px 60px rgba(10,10,10,.08); }
       * { box-sizing:border-box; }
-      body { margin:0; min-height:100vh; color:var(--text); font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(circle at 10% 0%,#17365a 0%,var(--bg) 57%); }
-      main { width:min(100%,720px); margin:0 auto; padding:20px 14px 36px; }
-      .hero,.panel { border:1px solid var(--border); border-radius:22px; background:rgba(16,29,48,.93); box-shadow:0 18px 42px rgba(0,0,0,.22); }
-      .hero { padding:22px; }
-      h1 { margin:0 0 8px; font-size:clamp(29px,9vw,42px); line-height:1.05; }
+      body { margin:0; min-height:100vh; color:var(--text); font-family:"Poppins","Avenir Next","Segoe UI",sans-serif; background:radial-gradient(circle at top left,rgba(227,237,239,.95),transparent 31%),radial-gradient(circle at bottom right,rgba(215,231,234,.8),transparent 27%),var(--bg); }
+      main { width:min(100%,720px); margin:0 auto; padding:28px 16px 44px; }
+      .hero,.panel { border:1px solid var(--border); border-radius:28px; background:var(--surface); box-shadow:var(--shadow); }
+      .hero { padding:24px; }
+      .eyebrow { margin:0 0 9px; color:var(--primary); font-size:12px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
+      h1 { margin:0 0 8px; font-family:"Bai Jamjuree","Avenir Next","Segoe UI",sans-serif; font-size:clamp(30px,9vw,44px); letter-spacing:-.03em; line-height:1.05; }
       h2 { margin:0; font-size:19px; }
       p { color:var(--muted); line-height:1.5; margin:0; }
-      .panel { margin-top:14px; padding:18px; }
+      .panel { margin-top:16px; padding:22px; }
       .steps { display:grid; gap:10px; margin-top:16px; }
-      .step { display:flex; align-items:center; gap:12px; padding:13px; border-radius:14px; background:var(--card); }
+      .step { display:flex; align-items:center; gap:12px; padding:14px; border:1px solid var(--border); border-radius:16px; background:#fafcfc; }
       .dot { width:12px; height:12px; border-radius:50%; background:var(--warn); flex:0 0 auto; }
       .step.ok .dot { background:var(--ok); }
-      .step.running .dot { background:var(--accent); animation:pulse 1s infinite alternate; }
+      .step.running .dot { background:var(--primary); animation:pulse 1s infinite alternate; }
       .step .copy { min-width:0; }
       .step strong { display:block; font-size:14px; }
       .step span { display:block; color:var(--muted); font-size:13px; margin-top:2px; overflow-wrap:anywhere; }
       form { display:grid; gap:15px; margin-top:16px; }
       label { display:grid; gap:7px; font-size:14px; font-weight:700; }
       small { color:var(--muted); font-weight:400; line-height:1.35; }
-      input { min-height:48px; width:100%; border:1px solid var(--border); border-radius:13px; padding:12px 14px; background:#0a1728; color:var(--text); font-size:16px; }
-      button,a.button { display:inline-flex; width:100%; min-height:52px; align-items:center; justify-content:center; border:0; border-radius:14px; padding:13px 16px; background:var(--accent); color:#06131d; font-size:16px; font-weight:800; text-decoration:none; cursor:pointer; }
+      input { min-height:52px; width:100%; border:1px solid var(--border); border-radius:12px; padding:12px 14px; background:var(--surface); color:var(--text); font-size:16px; }
+      input:focus { outline:2px solid rgba(0,67,76,.18); border-color:var(--primary); }
+      button,a.button { display:inline-flex; width:100%; min-height:52px; align-items:center; justify-content:center; border:0; border-radius:12px; padding:13px 16px; background:var(--primary); color:#fff; font-size:16px; font-weight:800; text-decoration:none; cursor:pointer; box-shadow:0 1px 2px rgba(0,67,76,.3); }
+      button:hover,a.button:hover { background:var(--primary-dark); }
       button:disabled { opacity:.58; cursor:wait; }
-      .secondary { margin-top:10px; background:transparent!important; border:1px solid var(--border)!important; color:var(--text)!important; }
+      .secondary { margin-top:10px; background:var(--surface)!important; border:1px solid #c8d4d8!important; color:var(--primary)!important; box-shadow:none!important; }
       .message { display:none; margin-top:14px; border-radius:13px; padding:12px 14px; line-height:1.45; }
       .message.show { display:block; }
       .message.error { background:rgba(255,123,123,.12); border:1px solid rgba(255,123,123,.38); }
@@ -4308,6 +4315,7 @@ def _render_setup_html(ingress_path: str = "") -> str:
   <body>
     <main>
       <section class="hero">
+        <p class="eyebrow">Hausie local app</p>
         <h1>Complete Hausie setup</h1>
         <p>Connect this Home Assistant installation to its Hausie home, then create the initial dashboards and automations.</p>
         <div class="steps">
@@ -4422,40 +4430,45 @@ def _render_credentials_html(ingress_path: str = "") -> str:
     <title>Hausie credentials</title>
     <style>
       :root {{
-        color-scheme: dark;
-        --bg: #0b1220;
-        --panel: #121a2b;
-        --panel-2: #18233a;
-        --text: #f4f7fb;
-        --muted: #9fb0c8;
-        --accent: #46c2ff;
-        --danger: #ff7b7b;
-        --ok: #49d18d;
-        --border: rgba(255,255,255,0.09);
+        color-scheme: light;
+        --bg: #f5f5f5;
+        --surface: #ffffff;
+        --tint: #e3edef;
+        --text: #0a0a0a;
+        --muted: #637277;
+        --primary: #00434c;
+        --primary-dark: #00343b;
+        --danger: #b42318;
+        --ok: #0d7c1b;
+        --border: #dfe5e7;
+        --shadow: 0 18px 60px rgba(10, 10, 10, 0.08);
       }}
       * {{ box-sizing: border-box; }}
       body {{
         margin: 0;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: radial-gradient(circle at top, #12203a 0%, var(--bg) 65%);
+        font-family: "Poppins", "Avenir Next", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top left, rgba(227,237,239,.95), transparent 31%), radial-gradient(circle at bottom right, rgba(215,231,234,.8), transparent 27%), var(--bg);
         color: var(--text);
         min-height: 100vh;
       }}
       .shell {{
         max-width: 760px;
         margin: 0 auto;
-        padding: 24px 16px 40px;
+        padding: 28px 16px 44px;
       }}
       .hero {{
-        background: rgba(15, 23, 42, 0.84);
+        background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: 24px;
-        padding: 22px;
-        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.34);
+        border-radius: 28px;
+        padding: 24px;
+        box-shadow: var(--shadow);
       }}
+      .eyebrow {{ margin: 0 0 9px; color: var(--primary); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }}
       h1 {{
         margin: 0 0 10px;
-        font-size: clamp(28px, 5vw, 40px);
+        font-family: "Bai Jamjuree", "Avenir Next", "Segoe UI", sans-serif;
+        font-size: clamp(30px, 8vw, 44px);
+        letter-spacing: -.03em;
       }}
       p {{
         margin: 0;
@@ -4469,7 +4482,7 @@ def _render_credentials_html(ingress_path: str = "") -> str:
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       }}
       .stat, form {{
-        background: var(--panel);
+        background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 18px;
       }}
@@ -4508,9 +4521,9 @@ def _render_credentials_html(ingress_path: str = "") -> str:
       }}
       input {{
         width: 100%;
-        border-radius: 14px;
+        border-radius: 12px;
         border: 1px solid var(--border);
-        background: var(--panel-2);
+        background: var(--surface);
         color: var(--text);
         padding: 14px 16px;
         font-size: 16px;
@@ -4522,7 +4535,7 @@ def _render_credentials_html(ingress_path: str = "") -> str:
       }}
       button, .link-btn {{
         border: 0;
-        border-radius: 14px;
+        border-radius: 12px;
         padding: 14px 18px;
         font-size: 16px;
         font-weight: 700;
@@ -4530,13 +4543,13 @@ def _render_credentials_html(ingress_path: str = "") -> str:
         text-decoration: none;
       }}
       button {{
-        background: var(--accent);
-        color: #07111f;
+        background: var(--primary);
+        color: #ffffff;
       }}
       .link-btn {{
-        background: transparent;
-        color: var(--text);
-        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--primary);
+        border: 1px solid #c8d4d8;
       }}
       .message {{
         margin-top: 14px;
@@ -4558,6 +4571,7 @@ def _render_credentials_html(ingress_path: str = "") -> str:
   <body>
     <div class="shell">
       <section class="hero">
+        <p class="eyebrow">Hausie local app</p>
         <h1>Hausie credentials</h1>
         <p>Save the Home Assistant token and the password for the local support user used by Hausie for WebSocket access and UI automation. The support username is fixed to <strong>{support_username}</strong>.</p>
 
