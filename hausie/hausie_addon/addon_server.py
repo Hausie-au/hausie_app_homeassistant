@@ -30,6 +30,7 @@ from .core.managers.config_manager import ConfigManager
 from .core.managers.help_message_manager import HelpMessageManager
 from .core.utils.naming import slugify
 from .core.device_state import (
+    HAUSIE_ADMIN_USERNAME,
     HAUSIE_SUPPORT_USERNAME,
     migrate_ha_runtime_credentials_from_env,
     persist_ha_runtime_credentials,
@@ -84,6 +85,8 @@ def _start_background_workflow(action_name: str, runner) -> None:
             runner()
         except Exception as exc:
             log.error(f"Background action failed: {action_name} ({exc})")
+            if action_name == "initialize_hausie":
+                _set_setup_progress("failed", str(exc))
 
     thread = threading.Thread(
         target=_wrapped,
@@ -1210,14 +1213,20 @@ def _patch_add_device_shortcut(log) -> None:
 
 def _ha_credentials_status_payload() -> dict[str, Any]:
     token, username, password = resolve_ha_runtime_credentials()
+    state = load_device_state()
+    admin_password_configured = bool(state.get("hausie_admin_password_configured"))
     missing_fields: list[str] = []
     if not token:
         missing_fields.append("ha_token")
     if not password:
         missing_fields.append("support_password")
+    if not admin_password_configured:
+        missing_fields.append("admin_password")
     return {
         "has_token": bool(token),
         "has_support_password": bool(password),
+        "has_admin_password": admin_password_configured,
+        "admin_username": HAUSIE_ADMIN_USERNAME,
         "support_username": username or HAUSIE_SUPPORT_USERNAME,
         "missing_fields": missing_fields,
         "setup_required": bool(missing_fields),
@@ -1402,43 +1411,60 @@ def _patch_hausie_app_shortcut(log) -> None:
 def _save_ha_credentials(payload: dict[str, Any]) -> dict[str, Any]:
     log = get_logger("credentials")
     requested_token = str(payload.get("ha_token") or payload.get("token") or "").strip()
-    requested_password = str(payload.get("support_password") or payload.get("ha_ui_password") or "").strip()
+    requested_support_password = str(payload.get("support_password") or payload.get("ha_ui_password") or "").strip()
+    requested_admin_password = str(payload.get("admin_password") or "").strip()
     current_token, _current_username, current_password = resolve_ha_runtime_credentials()
+    state = load_device_state()
+    admin_password_configured = bool(state.get("hausie_admin_password_configured"))
 
     token_to_use = requested_token or current_token
-    password_to_use = requested_password or current_password
+    support_password_to_use = requested_support_password or current_password
     if not token_to_use:
         raise ValueError("Home Assistant token is required.")
-    if not password_to_use:
+    if not support_password_to_use:
         raise ValueError("Support user password is required.")
-
-    persist_ha_runtime_credentials(
-        ha_token=requested_token or None,
-        ha_ui_username=HAUSIE_SUPPORT_USERNAME,
-        ha_ui_password=requested_password or None,
-    )
+    if not requested_admin_password and not admin_password_configured:
+        raise ValueError("Hausie administrator password is required.")
 
     os.environ["HA_TOKEN"] = token_to_use
     os.environ["HA_UI_USERNAME"] = HAUSIE_SUPPORT_USERNAME
-    os.environ["HA_UI_PASSWORD"] = password_to_use
+    os.environ["HA_UI_PASSWORD"] = support_password_to_use
 
     ha = _resolve_ha_client()
-    if ha:
-        try:
-            try:
-                ha.delete_auth_user_by_username(HAUSIE_SUPPORT_USERNAME)
-            except Exception:
-                pass
+    if not ha:
+        raise RuntimeError("Home Assistant client is unavailable. Check the access token and retry.")
+
+    try:
+        if requested_support_password:
+            ha.delete_auth_user_by_username(HAUSIE_SUPPORT_USERNAME)
             ha.create_auth_user(
                 name="Hausie Support User",
                 username=HAUSIE_SUPPORT_USERNAME,
-                password=password_to_use,
+                password=support_password_to_use,
                 is_admin=True,
                 local_only=True,
             )
             log.ok(f"Support user refreshed: {HAUSIE_SUPPORT_USERNAME}")
-        except Exception as exc:
-            log.warn(f"Support user refresh skipped: {exc}")
+        if requested_admin_password:
+            ha.delete_auth_user_by_username(HAUSIE_ADMIN_USERNAME)
+            ha.create_auth_user(
+                name="Hausie Administrator",
+                username=HAUSIE_ADMIN_USERNAME,
+                password=requested_admin_password,
+                is_admin=True,
+                local_only=True,
+            )
+            state["hausie_admin_password_configured"] = True
+            save_device_state(state)
+            log.ok(f"Administrator password refreshed: {HAUSIE_ADMIN_USERNAME}")
+    except Exception as exc:
+        raise RuntimeError(f"Could not update local Hausie users: {exc}") from exc
+
+    persist_ha_runtime_credentials(
+        ha_token=requested_token or None,
+        ha_ui_username=HAUSIE_SUPPORT_USERNAME,
+        ha_ui_password=requested_support_password or None,
+    )
 
     try:
         _sync_local_config()
@@ -4269,6 +4295,7 @@ def _render_pairing_html(ingress_path: str = "") -> str:
 
 
 def _render_setup_html(ingress_path: str = "") -> str:
+    admin_username = html.escape(HAUSIE_ADMIN_USERNAME)
     support_username = html.escape(HAUSIE_SUPPORT_USERNAME)
     return """<!doctype html>
 <html>
@@ -4335,6 +4362,10 @@ def _render_setup_html(ingress_path: str = "") -> str:
             <input id="supportPassword" type="password" autocomplete="new-password" placeholder="Password for __SUPPORT_USERNAME__"/>
             <small>Used by the local Hausie support user. Leave blank only if already configured.</small>
           </label>
+          <label>Hausie administrator password
+            <input id="adminPassword" type="password" autocomplete="new-password" placeholder="Password for __ADMIN_USERNAME__"/>
+            <small>Used only to create or update the local administrator. Hausie does not retain this password.</small>
+          </label>
           <label>Hausie pairing code
             <input id="pairingCode" type="password" autocomplete="off" placeholder="Code for this customer's Hausie home"/>
             <small>Required only when this Pi has not been paired yet. It is not stored after registration.</small>
@@ -4374,8 +4405,8 @@ def _render_setup_html(ingress_path: str = "") -> str:
 
       function render(status) {
         currentStatus = status;
-        const credentialsReady = status.has_token && status.has_support_password;
-        setStep("credentialsStep", credentialsReady, false, credentialsReady ? "Configured" : "Token and support password are required");
+        const credentialsReady = status.has_token && status.has_support_password && status.has_admin_password;
+        setStep("credentialsStep", credentialsReady, false, credentialsReady ? "Configured" : "Token, support password, and administrator password are required");
         setStep("pairingStep", status.paired, false, status.paired ? `Paired as ${status.device_id}` : "Pairing code is required");
         setStep("initializeStep", status.initialized, status.initializing, status.initialized ? "Completed" : status.message);
         initializeButton.disabled = Boolean(status.initializing || status.initialized);
@@ -4398,6 +4429,7 @@ def _render_setup_html(ingress_path: str = "") -> str:
             body: JSON.stringify({
               ha_token: document.getElementById("haToken").value.trim(),
               support_password: document.getElementById("supportPassword").value,
+              admin_password: document.getElementById("adminPassword").value,
               pairing_code: document.getElementById("pairingCode").value.trim()
             })
           });
@@ -4414,11 +4446,12 @@ def _render_setup_html(ingress_path: str = "") -> str:
       setInterval(refreshStatus, 2000);
     </script>
   </body>
-</html>""".replace("__SUPPORT_USERNAME__", support_username).replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path)))
+</html>""".replace("__ADMIN_USERNAME__", admin_username).replace("__SUPPORT_USERNAME__", support_username).replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path)))
 
 
 def _render_credentials_html(ingress_path: str = "") -> str:
     status = _ha_credentials_status_payload()
+    admin_username = html.escape(str(status.get("admin_username") or HAUSIE_ADMIN_USERNAME))
     support_username = html.escape(str(status.get("support_username") or HAUSIE_SUPPORT_USERNAME))
     status_json = json.dumps(status)
     ingress_path_json = json.dumps(_normalize_ingress_path(ingress_path))
@@ -4573,7 +4606,7 @@ def _render_credentials_html(ingress_path: str = "") -> str:
       <section class="hero">
         <p class="eyebrow">Hausie local app</p>
         <h1>Hausie credentials</h1>
-        <p>Save the Home Assistant token and the password for the local support user used by Hausie for WebSocket access and UI automation. The support username is fixed to <strong>{support_username}</strong>.</p>
+        <p>Save the Home Assistant token and the passwords for the local Hausie administrator and support users. Hausie uses <strong>{support_username}</strong> for WebSocket access and UI automation; it does not retain the administrator password after saving it.</p>
 
         <div class="grid">
           <div class="stat">
@@ -4583,6 +4616,14 @@ def _render_credentials_html(ingress_path: str = "") -> str:
           <div class="stat">
             <div class="label">Support password</div>
             <div class="value" id="passwordStatus"></div>
+          </div>
+          <div class="stat">
+            <div class="label">Administrator password</div>
+            <div class="value" id="adminPasswordStatus"></div>
+          </div>
+          <div class="stat">
+            <div class="label">Administrator user</div>
+            <div class="value">{admin_username}</div>
           </div>
           <div class="stat">
             <div class="label">Support user</div>
@@ -4601,6 +4642,11 @@ def _render_credentials_html(ingress_path: str = "") -> str:
             <input id="supportPassword" name="supportPassword" type="password" autocomplete="new-password" placeholder="Password for {support_username}"/>
             <small>Leave blank to keep the current password if one is already saved.</small>
           </div>
+          <div class="field">
+            <label for="adminPassword">Administrator password</label>
+            <input id="adminPassword" name="adminPassword" type="password" autocomplete="new-password" placeholder="Password for {admin_username}"/>
+            <small>Required on first setup. Leave blank later to keep the current administrator password.</small>
+          </div>
           <div class="button-row">
             <button id="saveBtn" type="submit">Save credentials</button>
             <a class="link-btn" href="/config-dashboard/main">Back to config</a>
@@ -4616,12 +4662,15 @@ def _render_credentials_html(ingress_path: str = "") -> str:
       const saveBtn = document.getElementById("saveBtn");
       const tokenStatus = document.getElementById("tokenStatus");
       const passwordStatus = document.getElementById("passwordStatus");
+      const adminPasswordStatus = document.getElementById("adminPasswordStatus");
 
       function renderStatus(status) {{
         tokenStatus.textContent = status.has_token ? "Configured" : "Missing";
         tokenStatus.className = `value ${{status.has_token ? "ok" : "bad"}}`;
         passwordStatus.textContent = status.has_support_password ? "Configured" : "Missing";
         passwordStatus.className = `value ${{status.has_support_password ? "ok" : "bad"}}`;
+        adminPasswordStatus.textContent = status.has_admin_password ? "Configured" : "Missing";
+        adminPasswordStatus.className = `value ${{status.has_admin_password ? "ok" : "bad"}}`;
       }}
 
       async function request(path, options = {{}}) {{
@@ -4649,13 +4698,15 @@ def _render_credentials_html(ingress_path: str = "") -> str:
         event.preventDefault();
         const haToken = document.getElementById("haToken").value.trim();
         const supportPassword = document.getElementById("supportPassword").value;
+        const adminPassword = document.getElementById("adminPassword").value;
         try {{
           saveBtn.disabled = true;
           const payload = await request("/credentials", {{
             method: "POST",
             body: JSON.stringify({{
               ha_token: haToken,
-              support_password: supportPassword
+              support_password: supportPassword,
+              admin_password: adminPassword
             }})
           }});
           renderStatus(payload.status || initialStatus);

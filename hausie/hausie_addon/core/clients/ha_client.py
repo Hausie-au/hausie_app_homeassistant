@@ -346,6 +346,8 @@ class HAClient:
             username = str(user.get("username") or user.get("name") or "").strip().lower()
             if username != target:
                 continue
+            if user.get("isOwner"):
+                raise RuntimeError(f"Refusing to replace owner account '{username}'.")
             user_id = user.get("id")
             if not user_id:
                 continue

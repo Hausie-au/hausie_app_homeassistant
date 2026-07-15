@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Tuple, Optional
 
+HAUSIE_ADMIN_USERNAME = "hausie_admin"
 HAUSIE_SUPPORT_USERNAME = "hausie_support_user"
 
 

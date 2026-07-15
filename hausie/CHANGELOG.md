@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.77
+
+- Add separate local credential fields for `hausie_admin` and `hausie_support_user` in the setup and credentials screens.
+- Store only the support-user password required by Playwright; use the administrator password only to update the local Home Assistant account.
+- Mark initialization as failed when its background workflow exits unexpectedly, rather than leaving the setup screen in a permanent loading state.
+
 ## 0.2.76
 
 - Align the local Hausie App setup, pairing, and credentials screens with the shared Hausie visual identity.
