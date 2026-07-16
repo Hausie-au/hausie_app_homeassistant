@@ -6,7 +6,7 @@ the generated Hausie dashboards, helpers, scripts, groups, covers, and support f
 ## Features
 
 - Connect a Home Assistant device to Hausie Cloud with a pairing code.
-- Apply dashboards and generated YAML assets produced by Hausie Cloud.
+- Update the storage-managed Hausie dashboard through the Home Assistant UI and apply generated configuration assets from Hausie Cloud.
 - Keep a persistent device state inside the add-on data directory.
 - Enable Cloud-controlled remote support with SSH and Tailscale add-on integration.
 
@@ -30,9 +30,9 @@ tailscale_ip: ""
 
 Optional logging and support settings are also exposed in the add-on schema.
 
-If you want Hausie to recreate the main Hausie dashboard through Playwright,
-configure a dedicated Home Assistant UI user in `ha_ui_username` and
-`ha_ui_password`.
+The main Hausie dashboard must already exist as a UI-managed dashboard in the
+base backup. Hausie updates that dashboard through Playwright and never
+registers it as a YAML dashboard in `configuration.yaml`.
 
 ## Storage model
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.84
+
+- Stop registering the main Hausie dashboard as a YAML dashboard in `configuration.yaml`.
+- Preserve the storage-managed Hausie dashboard provided by the base Home Assistant backup.
+- Remove any legacy `hausie-dashboard` YAML registration during the next configuration sync.
+
 ## 0.2.83
 
 - Allow an initialized Hausie installation to save and verify missing local credentials without rebuilding dashboards or automations.
