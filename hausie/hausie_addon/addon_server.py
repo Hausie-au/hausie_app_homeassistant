@@ -1082,23 +1082,55 @@ def _start_inventory_monitor() -> None:
     _INVENTORY_MONITOR_THREAD.start()
 
 
-def _supervisor_request(method: str, path: str) -> dict[str, Any]:
+def _supervisor_request(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    raise_on_error: bool = False,
+) -> dict[str, Any]:
     token = os.getenv("SUPERVISOR_TOKEN", "").strip()
     if not token:
+        if raise_on_error:
+            raise RuntimeError("Supervisor token is unavailable.")
         return {}
     url = f"http://supervisor{path}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    resp = requests.request(method, url, headers=headers, timeout=15)
+    resp = requests.request(method, url, headers=headers, json=payload, timeout=15)
     if resp.status_code // 100 != 2:
+        if raise_on_error:
+            try:
+                error_payload = resp.json()
+            except Exception:
+                error_payload = {}
+            if not isinstance(error_payload, dict):
+                error_payload = {}
+            detail = str(
+                error_payload.get("message")
+                or error_payload.get("error")
+                or resp.text
+                or f"HTTP {resp.status_code}"
+            ).strip()
+            raise RuntimeError(f"Supervisor request {method} {path} failed: {detail}")
         return {}
     try:
         payload = resp.json()
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _reset_local_ha_password(username: str, password: str) -> None:
+    """Change a Home Assistant password without replacing the user account."""
+    _supervisor_request(
+        "POST",
+        "/auth/reset",
+        {"username": username, "password": password},
+        raise_on_error=True,
+    )
 
 
 def _resolve_self_addon_slug() -> str:
@@ -1443,28 +1475,54 @@ def _save_ha_credentials(payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Home Assistant client is unavailable. Check the access token and retry.")
 
     try:
-        if requested_support_password:
-            ha.delete_auth_user_by_username(HAUSIE_SUPPORT_USERNAME)
-            ha.create_auth_user(
-                name="Hausie Support User",
-                username=HAUSIE_SUPPORT_USERNAME,
-                password=support_password_to_use,
-                is_admin=True,
-                local_only=True,
-            )
-            log.ok(f"Support user refreshed: {HAUSIE_SUPPORT_USERNAME}")
+        users = ha.fetch_users()
+        users_by_username = {
+            str(user.get("username") or user.get("name") or "").strip().lower(): user
+            for user in users
+            if isinstance(user, dict)
+        }
+
         if requested_admin_password:
-            ha.delete_auth_user_by_username(HAUSIE_ADMIN_USERNAME)
-            ha.create_auth_user(
-                name="Hausie Administrator",
-                username=HAUSIE_ADMIN_USERNAME,
-                password=requested_admin_password,
-                is_admin=True,
-                local_only=True,
-            )
+            admin_user = users_by_username.get(HAUSIE_ADMIN_USERNAME)
+            if admin_user:
+                _reset_local_ha_password(HAUSIE_ADMIN_USERNAME, requested_admin_password)
+                log.ok(f"Administrator password updated: {HAUSIE_ADMIN_USERNAME}")
+            else:
+                ha.create_auth_user(
+                    name="Hausie Administrator",
+                    username=HAUSIE_ADMIN_USERNAME,
+                    password=requested_admin_password,
+                    is_admin=True,
+                    local_only=True,
+                )
+                log.ok(f"Administrator user created: {HAUSIE_ADMIN_USERNAME}")
             state["hausie_admin_password_configured"] = True
             save_device_state(state)
-            log.ok(f"Administrator password refreshed: {HAUSIE_ADMIN_USERNAME}")
+
+        if requested_support_password:
+            support_user = users_by_username.get(HAUSIE_SUPPORT_USERNAME)
+            if support_user:
+                if not support_user.get("isAdmin"):
+                    raise RuntimeError(
+                        f"Existing support account '{HAUSIE_SUPPORT_USERNAME}' is not an administrator."
+                    )
+                _reset_local_ha_password(HAUSIE_SUPPORT_USERNAME, support_password_to_use)
+                log.ok(f"Support user password updated: {HAUSIE_SUPPORT_USERNAME}")
+            else:
+                ha.create_auth_user(
+                    name="Hausie Support User",
+                    username=HAUSIE_SUPPORT_USERNAME,
+                    password=support_password_to_use,
+                    is_admin=True,
+                    local_only=True,
+                )
+                log.ok(f"Support user created: {HAUSIE_SUPPORT_USERNAME}")
+
+        if requested_admin_password or requested_support_password:
+            try:
+                _supervisor_request("DELETE", "/auth/cache", raise_on_error=True)
+            except Exception as exc:
+                log.warn(f"Home Assistant auth cache reset skipped: {exc}")
     except Exception as exc:
         raise RuntimeError(f"Could not update local Hausie users: {exc}") from exc
 

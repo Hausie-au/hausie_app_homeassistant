@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.80
+
+- Change existing `hausie_admin` and `hausie_support_user` passwords through the Supervisor authentication API without deleting or recreating either account.
+- Preserve the Home Assistant owner account, user IDs, permissions, and existing account relationships during credential setup.
+- Create a required Hausie account only when it does not already exist.
+
 ## 0.2.79
 
 - Verify the local Home Assistant token and required Hausie accounts at startup and after saving credentials.
