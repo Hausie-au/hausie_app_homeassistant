@@ -4493,7 +4493,8 @@ def _render_setup_html(ingress_path: str = "") -> str:
       input:focus { outline:2px solid rgba(0,67,76,.18); border-color:var(--primary); }
       button,a.button { display:inline-flex; width:100%; min-height:52px; align-items:center; justify-content:center; border:0; border-radius:12px; padding:13px 16px; background:var(--primary); color:#fff; font-size:16px; font-weight:800; text-decoration:none; cursor:pointer; box-shadow:0 1px 2px rgba(0,67,76,.3); }
       button:hover,a.button:hover { background:var(--primary-dark); }
-      button:disabled { opacity:.58; cursor:wait; }
+      button:disabled { opacity:.58; cursor:not-allowed; }
+      button.loading:disabled { cursor:wait; }
       .secondary { margin-top:10px; background:var(--surface)!important; border:1px solid #c8d4d8!important; color:var(--primary)!important; box-shadow:none!important; }
       .message { display:none; margin-top:14px; border-radius:13px; padding:12px 14px; line-height:1.45; }
       .message.show { display:block; }
@@ -4558,23 +4559,33 @@ __CREDENTIAL_FIELDS__
 
       function render(status) {
         currentStatus = status;
-        const credentialsReady = status.has_token && status.has_support_password && status.has_admin_password;
-        setStep("credentialsStep", credentialsReady, false, credentialsReady ? "Configured" : "Token, support password, and administrator password are required");
+        const credentialsReady = Boolean(status.credentials_valid);
+        const fullyReady = Boolean(status.initialized && credentialsReady);
+        const repairingCredentials = Boolean(status.initialized && !credentialsReady);
+        setStep("credentialsStep", credentialsReady, false, credentialsReady ? "Configured and verified" : (status.validation_error || "Token, support password, and administrator password are required"));
         setStep("pairingStep", status.paired, false, status.paired ? `Paired as ${status.device_id}` : "Pairing code is required");
-        setStep("initializeStep", status.initialized, status.initializing, status.initialized ? "Completed" : status.message);
-        initializeButton.disabled = Boolean(status.initializing || status.initialized);
-        initializeButton.textContent = status.initializing ? "Initializing Hausie..." : status.initialized ? "Hausie initialized" : "Initialize Hausie";
-        openConfig.hidden = !status.initialized;
+        setStep("initializeStep", fullyReady, status.initializing, fullyReady ? "Completed" : repairingCredentials ? "Configuration exists; verify local credentials to finish" : status.message);
+        initializeButton.disabled = Boolean(status.initializing || fullyReady);
+        initializeButton.classList.toggle("loading", Boolean(status.initializing));
+        initializeButton.textContent = status.initializing ? "Initializing Hausie..." : fullyReady ? "Hausie initialized" : repairingCredentials ? "Save and verify credentials" : "Initialize Hausie";
+        openConfig.hidden = !fullyReady;
         if (status.phase === "failed") showMessage("error", status.message);
       }
 
       async function refreshStatus() {
-        try { render(await request("/setup/status")); } catch (error) { showMessage("error", error.message); }
+        try {
+          const status = await request("/setup/status");
+          render(status);
+          return status;
+        } catch (error) {
+          showMessage("error", error.message);
+          return null;
+        }
       }
 
       document.getElementById("setupForm").addEventListener("submit", async (event) => {
         event.preventDefault();
-        if (currentStatus?.initializing || currentStatus?.initialized) return;
+        if (currentStatus?.initializing || (currentStatus?.initialized && currentStatus?.credentials_valid)) return;
         try {
           initializeButton.disabled = true;
           const response = await request("/setup/initialize", {
@@ -4588,15 +4599,22 @@ __CREDENTIAL_FIELDS__
           });
           document.getElementById("pairingCode").value = "";
           showMessage("success", response.message || "Hausie initialization started.");
-          await refreshStatus();
+          const status = await refreshStatus();
+          if (status?.initialized && status?.credentials_valid) {
+            setTimeout(() => window.location.reload(), 700);
+          }
         } catch (error) {
           showMessage("error", error.message);
           initializeButton.disabled = false;
         }
       });
 
-      refreshStatus();
-      setInterval(refreshStatus, 2000);
+      async function scheduleStatusRefresh() {
+        await refreshStatus();
+        window.setTimeout(scheduleStatusRefresh, currentStatus?.initializing ? 2000 : 15000);
+      }
+
+      scheduleStatusRefresh();
     </script>
   </body>
 </html>""".replace("__CREDENTIAL_FIELDS__", credential_fields).replace("__ADMIN_USERNAME__", admin_username).replace("__SUPPORT_USERNAME__", support_username).replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path))).replace("__CSRF_TOKEN__", json.dumps(_UI_CSRF_TOKEN))
@@ -4916,6 +4934,13 @@ def _render_credentials_html(ingress_path: str = "") -> str:
 
 
 class _AddonHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: Any) -> None:
+        """Keep internal UI polling out of the Supervisor log."""
+        path = self.path.split("?", 1)[0].rstrip("/")
+        if path in {"/setup/status", "/credentials/status", "/pairing/status"}:
+            return
+        super().log_message(format, *args)
+
     def _send_security_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
         self.send_header("Pragma", "no-cache")
@@ -5050,6 +5075,7 @@ class _AddonHandler(BaseHTTPRequestHandler):
                 self._send_json(409, {"error": "Another Hausie action is already in progress."})
                 return
             try:
+                was_initialized = bool(_setup_status_payload()["initialized"])
                 _save_ha_credentials(payload)
                 pairing_code = str(payload.get("pairing_code") or "").strip()
                 device_id, device_token = resolve_device_credentials()
@@ -5059,6 +5085,17 @@ class _AddonHandler(BaseHTTPRequestHandler):
                     _register_with_pairing_code(pairing_code)
                 elif not device_id or not device_token:
                     raise ValueError("Hausie pairing code is required.")
+                if was_initialized and not pairing_code:
+                    _set_setup_progress("complete", "Hausie credentials verified.", initialized=True)
+                    self._send_json(
+                        200,
+                        {
+                            "ok": True,
+                            "message": "Hausie credentials saved and verified.",
+                            "status": _setup_status_payload(),
+                        },
+                    )
+                    return
                 _set_setup_progress("initializing", "Preparing Hausie initialization...")
                 _start_background_workflow("initialize_hausie", _run_initialize_hausie)
             except ValueError as exc:

@@ -6,7 +6,9 @@ import sys
 import tempfile
 import unittest
 from email.message import Message
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -57,6 +59,40 @@ class IngressSecurityTests(unittest.TestCase):
     def test_invalid_csrf_token_is_rejected(self) -> None:
         headers = _headers(X_Hausie_CSRF_Token="wrong-token")
         self.assertFalse(addon_server._has_valid_ui_csrf_token(headers))
+
+
+class AddonAccessLogTests(unittest.TestCase):
+    def test_internal_status_polling_is_not_written_to_access_log(self) -> None:
+        handler = addon_server._AddonHandler.__new__(addon_server._AddonHandler)
+        handler.path = "/setup/status"
+
+        with patch.object(BaseHTTPRequestHandler, "log_message") as parent_log:
+            handler.log_message('"GET %s HTTP/1.1" 200 -', "/setup/status")
+
+        parent_log.assert_not_called()
+
+    def test_normal_requests_remain_visible_in_access_log(self) -> None:
+        handler = addon_server._AddonHandler.__new__(addon_server._AddonHandler)
+        handler.path = "/setup"
+
+        with patch.object(BaseHTTPRequestHandler, "log_message") as parent_log:
+            handler.log_message('"GET %s HTTP/1.1" 200 -', "/setup")
+
+        parent_log.assert_called_once()
+
+
+class SetupPageTests(unittest.TestCase):
+    def test_initialized_installation_can_repair_invalid_credentials(self) -> None:
+        status = {
+            "credentials": {"credentials_valid": False},
+        }
+        with patch.object(addon_server, "_setup_status_payload", return_value=status):
+            page = addon_server._render_setup_html("/api/hassio_ingress/session")
+
+        self.assertIn('repairingCredentials ? "Save and verify credentials"', page)
+        self.assertIn("currentStatus?.initialized && currentStatus?.credentials_valid", page)
+        self.assertIn("currentStatus?.initializing ? 2000 : 15000", page)
+        self.assertNotIn("setInterval(refreshStatus, 2000)", page)
 
 
 class DeviceStateSecurityTests(unittest.TestCase):

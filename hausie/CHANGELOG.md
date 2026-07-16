@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.83
+
+- Allow an initialized Hausie installation to save and verify missing local credentials without rebuilding dashboards or automations.
+- Report initialization as complete only when the required Home Assistant credentials are also valid.
+- Reduce idle setup status polling and keep internal status requests out of the add-on log while preserving real requests and errors.
+- Use a waiting cursor only while initialization is actively running.
+
 ## 0.2.82
 
 - Change existing Hausie account passwords through Home Assistant's administrator WebSocket API using stable user IDs.
