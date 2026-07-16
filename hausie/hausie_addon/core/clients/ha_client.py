@@ -257,7 +257,7 @@ class HAClient:
 
     def fetch_users(self) -> list[dict]:
         """Fetch users from Home Assistant via WebSocket."""
-        ws = websocket.create_connection(self.ha_url_ws)
+        ws = websocket.create_connection(self.ha_url_ws, timeout=15)
         try:
             msg = json.loads(ws.recv())
             if msg.get("type") != "auth_required":

@@ -1215,6 +1215,9 @@ def _ha_credentials_status_payload() -> dict[str, Any]:
     token, username, password = resolve_ha_runtime_credentials()
     state = load_device_state()
     admin_password_configured = bool(state.get("hausie_admin_password_configured"))
+    validation = state.get("ha_credentials_validation") if isinstance(state.get("ha_credentials_validation"), dict) else {}
+    credentials_valid = bool(validation.get("valid"))
+    validation_error = str(validation.get("error") or "").strip()
     missing_fields: list[str] = []
     if not token:
         missing_fields.append("ha_token")
@@ -1226,10 +1229,12 @@ def _ha_credentials_status_payload() -> dict[str, Any]:
         "has_token": bool(token),
         "has_support_password": bool(password),
         "has_admin_password": admin_password_configured,
+        "credentials_valid": credentials_valid,
+        "validation_error": validation_error,
         "admin_username": HAUSIE_ADMIN_USERNAME,
         "support_username": username or HAUSIE_SUPPORT_USERNAME,
         "missing_fields": missing_fields,
-        "setup_required": bool(missing_fields),
+        "setup_required": bool(missing_fields) or not credentials_valid,
     }
 
 
@@ -1264,9 +1269,9 @@ def _setup_status_payload() -> dict[str, Any]:
     elif setup_state.get("status") == "failed":
         phase = "failed"
         message = str(setup_state.get("message") or "Hausie initialization failed. Review the add-on logs and try again.")
-    elif not credentials["has_token"] or not credentials["has_support_password"]:
+    elif credentials["setup_required"]:
         phase = "credentials"
-        message = "Enter the Home Assistant token and the Hausie support password."
+        message = credentials["validation_error"] or "Enter the Home Assistant token and the Hausie account passwords."
     elif not paired:
         phase = "pairing"
         message = "Enter the pairing code for this Hausie home."
@@ -1281,6 +1286,9 @@ def _setup_status_payload() -> dict[str, Any]:
         "credentials": credentials,
         "has_token": credentials["has_token"],
         "has_support_password": credentials["has_support_password"],
+        "has_admin_password": credentials["has_admin_password"],
+        "credentials_valid": credentials["credentials_valid"],
+        "validation_error": credentials["validation_error"],
         "paired": paired,
         "device_id": str(device_id or ""),
         "initialized": initialized,
@@ -1465,6 +1473,9 @@ def _save_ha_credentials(payload: dict[str, Any]) -> dict[str, Any]:
         ha_ui_username=HAUSIE_SUPPORT_USERNAME,
         ha_ui_password=requested_support_password or None,
     )
+    validation = _validate_ha_credentials(log)
+    if not validation["credentials_valid"]:
+        raise RuntimeError(validation["validation_error"] or "Home Assistant credentials could not be verified.")
 
     try:
         _sync_local_config()
@@ -1495,7 +1506,7 @@ def _save_ha_credentials(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         pass
 
-    return _ha_credentials_status_payload()
+    return validation
 
 
 def _sync_local_config() -> None:
@@ -1541,6 +1552,47 @@ def _resolve_ha_client() -> HAClient | None:
     ha_ws_url = os.getenv("HA_WS_URL", "ws://homeassistant:8123/api/websocket")
     ha_rest_url = os.getenv("HA_REST_URL", "http://homeassistant:8123/api")
     return HAClient(ha_url_ws=ha_ws_url, ha_url_rest=ha_rest_url, token=token)
+
+
+def _validate_ha_credentials(log=None) -> dict[str, Any]:
+    """Validate the local token and both required Hausie accounts once per startup/save."""
+    state = load_device_state()
+    token, _username, support_password = resolve_ha_runtime_credentials()
+    valid = False
+    error = ""
+    if not token or not support_password or not state.get("hausie_admin_password_configured"):
+        error = "Home Assistant token and both Hausie account passwords are required."
+    else:
+        ha = _resolve_ha_client()
+        try:
+            if not ha:
+                raise RuntimeError("Home Assistant client is unavailable.")
+            users = ha.fetch_users()
+            usernames = {
+                str(user.get("username") or user.get("name") or "").strip().lower()
+                for user in users
+                if isinstance(user, dict)
+            }
+            required = {HAUSIE_ADMIN_USERNAME, HAUSIE_SUPPORT_USERNAME}
+            missing_users = sorted(required - usernames)
+            if missing_users:
+                raise RuntimeError(f"Missing local Hausie user: {', '.join(missing_users)}.")
+            valid = True
+        except Exception as exc:
+            error = f"Credential verification failed: {exc}"
+
+    state["ha_credentials_validation"] = {
+        "valid": valid,
+        "error": error,
+        "checked_at": int(time.time()),
+    }
+    save_device_state(state)
+    if log:
+        if valid:
+            log.ok("Local Hausie credentials verified.")
+        elif error:
+            log.warn(error)
+    return _ha_credentials_status_payload()
 
 
 def _set_hausie_system_state(ha: HAClient | None, *, busy: bool, status: str) -> None:
@@ -4295,8 +4347,24 @@ def _render_pairing_html(ingress_path: str = "") -> str:
 
 
 def _render_setup_html(ingress_path: str = "") -> str:
+    status = _setup_status_payload()
     admin_username = html.escape(HAUSIE_ADMIN_USERNAME)
     support_username = html.escape(HAUSIE_SUPPORT_USERNAME)
+    credential_fields = ""
+    if not status["credentials"]["credentials_valid"]:
+        credential_fields = """          <label>Home Assistant token
+            <input id="haToken" type="password" autocomplete="off" placeholder="Paste a long-lived access token"/>
+            <small>Leave blank only if it is already configured.</small>
+          </label>
+          <label>Hausie support password
+            <input id="supportPassword" type="password" autocomplete="new-password" placeholder="Password for __SUPPORT_USERNAME__"/>
+            <small>Used by the local Hausie support user. Leave blank only if already configured.</small>
+          </label>
+          <label>Hausie administrator password
+            <input id="adminPassword" type="password" autocomplete="new-password" placeholder="Password for __ADMIN_USERNAME__"/>
+            <small>Used only to create or update the local administrator. Hausie does not retain this password.</small>
+          </label>
+"""
     return """<!doctype html>
 <html>
   <head>
@@ -4354,18 +4422,7 @@ def _render_setup_html(ingress_path: str = "") -> str:
       <section class="panel">
         <h2>Installation details</h2>
         <form id="setupForm">
-          <label>Home Assistant token
-            <input id="haToken" type="password" autocomplete="off" placeholder="Paste a long-lived access token"/>
-            <small>Leave blank only if it is already configured.</small>
-          </label>
-          <label>Hausie support password
-            <input id="supportPassword" type="password" autocomplete="new-password" placeholder="Password for __SUPPORT_USERNAME__"/>
-            <small>Used by the local Hausie support user. Leave blank only if already configured.</small>
-          </label>
-          <label>Hausie administrator password
-            <input id="adminPassword" type="password" autocomplete="new-password" placeholder="Password for __ADMIN_USERNAME__"/>
-            <small>Used only to create or update the local administrator. Hausie does not retain this password.</small>
-          </label>
+__CREDENTIAL_FIELDS__
           <label>Hausie pairing code
             <input id="pairingCode" type="password" autocomplete="off" placeholder="Code for this customer's Hausie home"/>
             <small>Required only when this Pi has not been paired yet. It is not stored after registration.</small>
@@ -4427,9 +4484,9 @@ def _render_setup_html(ingress_path: str = "") -> str:
           const response = await request("/setup/initialize", {
             method: "POST",
             body: JSON.stringify({
-              ha_token: document.getElementById("haToken").value.trim(),
-              support_password: document.getElementById("supportPassword").value,
-              admin_password: document.getElementById("adminPassword").value,
+              ha_token: document.getElementById("haToken")?.value.trim() || "",
+              support_password: document.getElementById("supportPassword")?.value || "",
+              admin_password: document.getElementById("adminPassword")?.value || "",
               pairing_code: document.getElementById("pairingCode").value.trim()
             })
           });
@@ -4446,7 +4503,37 @@ def _render_setup_html(ingress_path: str = "") -> str:
       setInterval(refreshStatus, 2000);
     </script>
   </body>
-</html>""".replace("__ADMIN_USERNAME__", admin_username).replace("__SUPPORT_USERNAME__", support_username).replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path)))
+</html>""".replace("__CREDENTIAL_FIELDS__", credential_fields).replace("__ADMIN_USERNAME__", admin_username).replace("__SUPPORT_USERNAME__", support_username).replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path)))
+
+
+def _render_portal_html() -> str:
+    return """<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Hausie App</title>
+    <style>
+      :root { color-scheme:light; --bg:#f5f5f5; --surface:#ffffff; --text:#0a0a0a; --muted:#637277; --primary:#00434c; --primary-dark:#00343b; --border:#dfe5e7; --shadow:0 18px 60px rgba(10,10,10,.08); }
+      * { box-sizing:border-box; }
+      body { min-height:100vh; margin:0; display:grid; place-items:center; padding:20px; color:var(--text); font-family:"Poppins","Avenir Next","Segoe UI",sans-serif; background:radial-gradient(circle at top left,rgba(227,237,239,.95),transparent 31%),radial-gradient(circle at bottom right,rgba(215,231,234,.8),transparent 27%),var(--bg); }
+      main { width:min(100%,560px); padding:32px 24px; border:1px solid var(--border); border-radius:28px; background:var(--surface); box-shadow:var(--shadow); text-align:center; }
+      .eyebrow { margin:0 0 9px; color:var(--primary); font-size:12px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
+      h1 { margin:0; font-family:"Bai Jamjuree","Avenir Next","Segoe UI",sans-serif; font-size:clamp(32px,9vw,46px); letter-spacing:-.03em; }
+      p { margin:14px 0 24px; color:var(--muted); line-height:1.55; }
+      a { display:inline-flex; min-height:52px; width:100%; align-items:center; justify-content:center; border-radius:12px; padding:13px 16px; color:#fff; background:var(--primary); font-weight:800; font-size:16px; text-decoration:none; }
+      a:hover { background:var(--primary-dark); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Hausie local app</p>
+      <h1>Hausie is ready</h1>
+      <p>Manage your home, plan, and support from the Hausie user portal.</p>
+      <a href="https://portal.hausiehome.com" target="_blank" rel="noopener noreferrer">Open Hausie Portal</a>
+    </main>
+  </body>
+</html>"""
 
 
 def _render_credentials_html(ingress_path: str = "") -> str:
@@ -5256,16 +5343,22 @@ class _AddonHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/")
         if path in {"", "/"}:
-            self._send_text(200, _render_setup_html(self._ingress_path()), "text/html; charset=utf-8")
+            status = _setup_status_payload()
+            page = _render_portal_html() if status["initialized"] and status["credentials_valid"] else _render_setup_html(self._ingress_path())
+            self._send_text(200, page, "text/html; charset=utf-8")
             return
         if path == "/setup":
-            self._send_text(200, _render_setup_html(self._ingress_path()), "text/html; charset=utf-8")
+            status = _setup_status_payload()
+            page = _render_portal_html() if status["initialized"] and status["credentials_valid"] else _render_setup_html(self._ingress_path())
+            self._send_text(200, page, "text/html; charset=utf-8")
             return
         if path == "/pairing":
             self._send_text(200, _render_pairing_html(self._ingress_path()), "text/html; charset=utf-8")
             return
         if path == "/credentials":
-            self._send_text(200, _render_credentials_html(self._ingress_path()), "text/html; charset=utf-8")
+            status = _ha_credentials_status_payload()
+            page = _render_portal_html() if status["credentials_valid"] else _render_credentials_html(self._ingress_path())
+            self._send_text(200, page, "text/html; charset=utf-8")
             return
         if path == "/credentials/status":
             self._send_json(200, _ha_credentials_status_payload())
@@ -5317,6 +5410,7 @@ def run(host: str = "0.0.0.0", port: int = 8000) -> None:
     global _ACTIVE_SERVER, _SHUTDOWN_REQUESTED
     log.start("Addon starting.")
     migrate_ha_runtime_credentials_from_env()
+    _validate_ha_credentials(log)
     server = HTTPServer((host, port), _AddonHandler)
     _ACTIVE_SERVER = server
     _SHUTDOWN_REQUESTED = False

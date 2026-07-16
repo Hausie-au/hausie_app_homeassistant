@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.79
+
+- Verify the local Home Assistant token and required Hausie accounts at startup and after saving credentials.
+- Hide the configuration dashboard credential shortcut and credential forms after successful verification.
+- Show the local Hausie App portal screen with a link to `https://portal.hausiehome.com` once setup is complete.
+
 ## 0.2.78
 
 - Prevent setup from remaining indefinitely in progress when Playwright installation stalls by applying a five-minute installer timeout.
