@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.81
+
+- Grant the add-on the dedicated Home Assistant authentication permission required to update existing local account passwords.
+- Remove the host port mapping so the Hausie web interface is available only through authenticated Home Assistant Ingress.
+- Restrict setup, credential, pairing, status, and log pages to authenticated Ingress requests from the Supervisor proxy.
+- Add CSRF protection to credential, initialization, and pairing mutations.
+- Store local Hausie state with owner-only file permissions and prevent browser caching of sensitive responses.
+
 ## 0.2.80
 
 - Change existing `hausie_admin` and `hausie_support_user` passwords through the Supervisor authentication API without deleting or recreating either account.

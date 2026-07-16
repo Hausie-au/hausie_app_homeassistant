@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import hmac
+import secrets
 import shutil
 import signal
 import tempfile
@@ -61,6 +63,46 @@ from .settings import DEFAULT_HAUSIE_CLOUD_URL, Settings
 ROOT_DIR = Path(__file__).resolve().parents[1]
 _ACTIVE_SERVER: HTTPServer | None = None
 _SHUTDOWN_REQUESTED = False
+_UI_CSRF_TOKEN = secrets.token_urlsafe(32)
+_INGRESS_PROXY_IPS = frozenset({"172.30.32.2", "::ffff:172.30.32.2"})
+_INGRESS_UI_PATHS = frozenset(
+    {
+        "",
+        "/",
+        "/setup",
+        "/setup/status",
+        "/pairing",
+        "/pairing/status",
+        "/credentials",
+        "/credentials/status",
+        "/logs",
+    }
+)
+_INGRESS_MUTATION_PATHS = frozenset(
+    {
+        "/setup/initialize",
+        "/credentials",
+        "/pairing/start",
+        "/pairing/stop",
+        "/pairing/confirm",
+    }
+)
+
+
+def _is_trusted_ingress_request(client_ip: str, headers: Any) -> bool:
+    """Accept UI requests only from Home Assistant's authenticated Ingress proxy."""
+    ingress_path = str(headers.get("X-Ingress-Path", "") or "").strip()
+    remote_user_id = str(headers.get("X-Remote-User-Id", "") or "").strip()
+    return (
+        str(client_ip or "").strip() in _INGRESS_PROXY_IPS
+        and ingress_path.startswith("/api/hassio_ingress/")
+        and bool(remote_user_id)
+    )
+
+
+def _has_valid_ui_csrf_token(headers: Any) -> bool:
+    supplied = str(headers.get("X-Hausie-CSRF-Token", "") or "").strip()
+    return bool(supplied) and hmac.compare_digest(supplied, _UI_CSRF_TOKEN)
 
 
 def _ha_restart_exception_is_expected(exc: Exception) -> bool:
@@ -4175,6 +4217,7 @@ def _render_pairing_html(ingress_path: str = "") -> str:
     </main>
     <script>
       const INGRESS_PATH = __INGRESS_PATH__;
+      const CSRF_TOKEN = __CSRF_TOKEN__;
       const state = {
         payload: null,
         selectedId: "",
@@ -4198,8 +4241,12 @@ def _render_pairing_html(ingress_path: str = "") -> str:
       async function request(path, options = {}) {
         const requestPath = path.startsWith("/") ? path : "/" + path;
         const response = await fetch(INGRESS_PATH + requestPath, {
-          headers: { "Content-Type": "application/json" },
           ...options,
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+            "X-Hausie-CSRF-Token": CSRF_TOKEN
+          }
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "Request failed");
@@ -4401,7 +4448,7 @@ def _render_pairing_html(ingress_path: str = "") -> str:
       setInterval(refreshStatus, 2000);
     </script>
   </body>
-</html>""".replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path)))
+</html>""".replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path))).replace("__CSRF_TOKEN__", json.dumps(_UI_CSRF_TOKEN))
 
 
 def _render_setup_html(ingress_path: str = "") -> str:
@@ -4493,6 +4540,7 @@ __CREDENTIAL_FIELDS__
     </main>
     <script>
       const INGRESS_PATH = __INGRESS_PATH__;
+      const CSRF_TOKEN = __CSRF_TOKEN__;
       const message = document.getElementById("message");
       const initializeButton = document.getElementById("initializeButton");
       const openConfig = document.getElementById("openConfig");
@@ -4500,7 +4548,7 @@ __CREDENTIAL_FIELDS__
 
       async function request(path, options = {}) {
         const requestPath = path.startsWith("/") ? path : "/" + path;
-        const response = await fetch(INGRESS_PATH + requestPath, { headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options });
+        const response = await fetch(INGRESS_PATH + requestPath, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}), "X-Hausie-CSRF-Token": CSRF_TOKEN } });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
         return payload;
@@ -4561,7 +4609,7 @@ __CREDENTIAL_FIELDS__
       setInterval(refreshStatus, 2000);
     </script>
   </body>
-</html>""".replace("__CREDENTIAL_FIELDS__", credential_fields).replace("__ADMIN_USERNAME__", admin_username).replace("__SUPPORT_USERNAME__", support_username).replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path)))
+</html>""".replace("__CREDENTIAL_FIELDS__", credential_fields).replace("__ADMIN_USERNAME__", admin_username).replace("__SUPPORT_USERNAME__", support_username).replace("__INGRESS_PATH__", json.dumps(_normalize_ingress_path(ingress_path))).replace("__CSRF_TOKEN__", json.dumps(_UI_CSRF_TOKEN))
 
 
 def _render_portal_html() -> str:
@@ -4600,6 +4648,7 @@ def _render_credentials_html(ingress_path: str = "") -> str:
     support_username = html.escape(str(status.get("support_username") or HAUSIE_SUPPORT_USERNAME))
     status_json = json.dumps(status)
     ingress_path_json = json.dumps(_normalize_ingress_path(ingress_path))
+    csrf_token_json = json.dumps(_UI_CSRF_TOKEN)
     return f"""<!doctype html>
 <html>
   <head>
@@ -4802,6 +4851,7 @@ def _render_credentials_html(ingress_path: str = "") -> str:
     </div>
     <script>
       const INGRESS_PATH = {ingress_path_json};
+      const CSRF_TOKEN = {csrf_token_json};
       const initialStatus = {status_json};
       const messageBox = document.getElementById("messageBox");
       const saveBtn = document.getElementById("saveBtn");
@@ -4821,11 +4871,12 @@ def _render_credentials_html(ingress_path: str = "") -> str:
       async function request(path, options = {{}}) {{
         const requestPath = path.startsWith("/") ? path : "/" + path;
         const response = await fetch(INGRESS_PATH + requestPath, {{
+          ...options,
           headers: {{
             "Content-Type": "application/json",
-            ...(options.headers || {{}})
-          }},
-          ...options
+            ...(options.headers || {{}}),
+            "X-Hausie-CSRF-Token": CSRF_TOKEN
+          }}
         }});
         const payload = await response.json().catch(() => ({{}}));
         if (!response.ok) {{
@@ -4875,11 +4926,19 @@ def _render_credentials_html(ingress_path: str = "") -> str:
 
 
 class _AddonHandler(BaseHTTPRequestHandler):
+    def _send_security_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+
     def _send_json(self, code: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        self._send_security_headers()
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -4891,6 +4950,7 @@ class _AddonHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self._send_security_headers()
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -4912,10 +4972,21 @@ class _AddonHandler(BaseHTTPRequestHandler):
     def _ingress_path(self) -> str:
         return _normalize_ingress_path(self.headers.get("X-Ingress-Path", ""))
 
+    def _is_trusted_ingress(self) -> bool:
+        client_ip = self.client_address[0] if self.client_address else ""
+        return _is_trusted_ingress_request(client_ip, self.headers)
+
+    def _authorize_ingress_mutation(self) -> bool:
+        return self._is_trusted_ingress() and _has_valid_ui_csrf_token(self.headers)
+
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/")
         log = get_logger("addon")
         log.info(f"HTTP POST {path}")
+        if path in _INGRESS_MUTATION_PATHS and not self._authorize_ingress_mutation():
+            log.warn(f"Rejected unauthorized Ingress mutation: {path}")
+            self._send_json(403, {"error": "Authenticated Home Assistant Ingress access is required."})
+            return
         if path == "/pairing/start":
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
@@ -5400,6 +5471,10 @@ class _AddonHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/")
+        if path in _INGRESS_UI_PATHS and not self._is_trusted_ingress():
+            get_logger("addon").warn(f"Rejected direct access to Ingress UI: {path or '/'}")
+            self._send_json(403, {"error": "Open this page through Home Assistant Ingress."})
+            return
         if path in {"", "/"}:
             status = _setup_status_payload()
             page = _render_portal_html() if status["initialized"] and status["credentials_valid"] else _render_setup_html(self._ingress_path())
@@ -5435,7 +5510,7 @@ class _AddonHandler(BaseHTTPRequestHandler):
                 body = "\n".join(lines)
             except Exception:
                 body = "No logs yet."
-            html = f"""<!doctype html>
+            page = f"""<!doctype html>
 <html>
   <head>
     <meta charset="utf-8"/>
@@ -5448,10 +5523,10 @@ class _AddonHandler(BaseHTTPRequestHandler):
   </head>
   <body>
     <h2>Hausie Add-on Logs (auto-refresh 5s)</h2>
-    <pre>{body}</pre>
+    <pre>{html.escape(body)}</pre>
   </body>
 </html>"""
-            self._send_text(200, html, "text/html; charset=utf-8")
+            self._send_text(200, page, "text/html; charset=utf-8")
             return
         if path == "/help_messages":
             if not self._authorize():

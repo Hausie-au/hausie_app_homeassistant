@@ -36,7 +36,11 @@ def load_device_state(path: Path | None = None) -> dict:
 def save_device_state(data: dict, path: Path | None = None) -> None:
     state_path = path or resolve_state_path()
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary_path = state_path.with_name(f".{state_path.name}.tmp")
+    temporary_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary_path.chmod(0o600)
+    temporary_path.replace(state_path)
+    state_path.chmod(0o600)
 
 
 def resolve_device_credentials() -> Tuple[Optional[str], Optional[str]]:
