@@ -159,13 +159,20 @@ class HAClient:
         data = response.json()
         return data if isinstance(data, dict) else {}
 
-    def call_service(self, domain: str, service: str, data: dict | None = None) -> dict:
+    def call_service(
+        self,
+        domain: str,
+        service: str,
+        data: dict | None = None,
+        *,
+        timeout_s: int = 15,
+    ) -> dict:
         """Call a Home Assistant service via REST."""
         if not domain or not service:
             raise ValueError("domain and service are required.")
         url = f"{self.ha_url_rest}/services/{domain}/{service}"
         payload = data or {}
-        resp = requests.post(url, headers=self.headers, json=payload, timeout=15)
+        resp = requests.post(url, headers=self.headers, json=payload, timeout=max(1, timeout_s))
         if resp.status_code // 100 != 2:
             raise RuntimeError(f"Service call failed {resp.status_code}: {resp.text}")
         return resp.json()

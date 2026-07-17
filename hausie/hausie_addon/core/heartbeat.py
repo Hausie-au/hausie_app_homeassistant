@@ -13,6 +13,7 @@ from typing import Any, Callable
 import requests
 
 from .clients.ha_client import HAClient
+from .component_updates import get_component_versions
 from .flow_logger import get_logger
 from .license_state import load_license_state
 
@@ -120,6 +121,11 @@ class HeartbeatReporter:
             config = self._ha.get_config()
         except Exception:
             config = {}
+        try:
+            components = get_component_versions()
+        except Exception as exc:
+            self._log.warn(f"Failed to inspect local component versions: {exc}")
+            components = {}
         return {
             "device_id": self._device_id,
             "timestamp": int(time.time()),
@@ -128,6 +134,7 @@ class HeartbeatReporter:
             "support_timeout": support.get("support_timeout"),
             "ha_version": config.get("version") or config.get("version_core"),
             "addon_version": os.getenv("HAUSIE_ADDON_VERSION") or "",
+            "components": components,
             "tailscale_node_id": os.getenv("HAUSIE_TAILSCALE_NODE_ID") or "",
             "tailscale_ip": tailscale_ip,
             "tailscale_ip_source": tailscale_ip_source,

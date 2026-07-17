@@ -27,6 +27,7 @@ from .core.flow_logger import get_logger
 from .core.managers.notification_manager import NotificationManager
 from .core.mqtt_listener import MQTTNotificationListener
 from .core.heartbeat import HeartbeatReporter
+from .core.component_updates import ComponentUpdateManager
 from .core.remote_support import RemoteSupportManager, _load_public_keys
 from .core.managers.config_manager import ConfigManager
 from .core.managers.help_message_manager import HelpMessageManager
@@ -1815,6 +1816,7 @@ _HEARTBEAT_ALLOWED_ACTIONS = {
     "sync_label_catalog",
     "sync_help_messages",
     "update_heartbeat_interval",
+    "update_components",
     "update_plan",
 }
 
@@ -1974,6 +1976,33 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
                         payload_data = action.get("payload") if isinstance(action.get("payload"), dict) else {}
                         _apply_heartbeat_interval_override(payload_data, log)
             normalized = [action for action in normalized if str(action.get("type") or "").strip().lower() != "update_heartbeat_interval"]
+            if not normalized:
+                return
+        if "update_components" in lower_actions:
+            with log.script("update_components"):
+                ha = _resolve_ha_client()
+                if not ha:
+                    raise RuntimeError("Home Assistant credentials are not configured.")
+                manager = ComponentUpdateManager(ha_client=ha, log=log)
+                updated_components: list[str] = []
+                for action in normalized:
+                    if str(action.get("type") or "").strip().lower() != "update_components":
+                        continue
+                    action_payload = (
+                        action.get("payload") if isinstance(action.get("payload"), dict) else {}
+                    )
+                    requested = action_payload.get("components")
+                    if isinstance(requested, dict):
+                        updated_components.extend(manager.apply(requested))
+                if "browser_mod" in updated_components:
+                    _restart_home_assistant(ha, log)
+                elif "button_card" in updated_components:
+                    _reload_browser_frontends(ha, log)
+            normalized = [
+                action
+                for action in normalized
+                if str(action.get("type") or "").strip().lower() != "update_components"
+            ]
             if not normalized:
                 return
         for action in normalized:

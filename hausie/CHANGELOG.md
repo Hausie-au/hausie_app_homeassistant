@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.85
+
+- Report installed Browser Mod and Button Card versions with every heartbeat.
+- Process cloud component-version updates through Home Assistant and HACS, with verified official-release fallback for unmanaged installations.
+- Verify each installed version before reporting success and apply bounded retry backoff after failures.
+- Restart Home Assistant only after Browser Mod changes and reload browser frontends after Button Card-only updates.
+
 ## 0.2.84
 
 - Stop registering the main Hausie dashboard as a YAML dashboard in `configuration.yaml`.
