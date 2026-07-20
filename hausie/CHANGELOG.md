@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.87
+
+- Create and maintain a storage-managed Hausie Portal webpage dashboard at add-on startup.
+- Use the Supervisor WebSocket proxy so the portal dashboard does not depend on pairing or installer-provided Home Assistant credentials.
+- Reconcile the dashboard metadata and portal URL without creating duplicates.
+
 ## 0.2.86
 
 - Allow the local installer to save credentials for users it has already provisioned without attempting a second password reset.

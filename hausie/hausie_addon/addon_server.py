@@ -32,6 +32,7 @@ from .core.remote_support import RemoteSupportManager, _load_public_keys
 from .core.managers.config_manager import ConfigManager
 from .core.managers.help_message_manager import HelpMessageManager
 from .core.utils.naming import slugify
+from .core.managers.portal_dashboard_manager import PortalDashboardManager
 from .core.device_state import (
     HAUSIE_ADMIN_USERNAME,
     HAUSIE_SUPPORT_USERNAME,
@@ -2374,6 +2375,43 @@ class _WSClient:
                 if not msg.get("success", True):
                     raise RuntimeError(f"WS call failed: {msg}")
                 return msg.get("result")
+
+
+def _ensure_portal_dashboard() -> str:
+    token = str(os.getenv("SUPERVISOR_TOKEN") or "").strip()
+    if not token:
+        raise RuntimeError("SUPERVISOR_TOKEN is unavailable")
+    ws_url = str(
+        os.getenv("HAUSIE_SUPERVISOR_WS_URL") or "ws://supervisor/core/websocket"
+    ).strip()
+    ws = _WSClient(ws_url, token)
+    try:
+        return PortalDashboardManager().ensure(ws)
+    finally:
+        ws.close()
+
+
+def _start_portal_dashboard_bootstrap() -> None:
+    dashboard_log = get_logger("dashboard")
+
+    def worker() -> None:
+        last_error: Exception | None = None
+        for attempt in range(1, 13):
+            try:
+                action = _ensure_portal_dashboard()
+                dashboard_log.ok(f"Hausie Portal webpage dashboard {action}.")
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt < 12:
+                    time.sleep(min(5 * attempt, 30))
+        dashboard_log.warn(f"Hausie Portal dashboard bootstrap failed: {last_error}")
+
+    threading.Thread(
+        target=worker,
+        name="hausie-portal-dashboard-bootstrap",
+        daemon=True,
+    ).start()
 
 
 def _resolve_device_id(ws: _WSClient, identifier: str) -> str | None:
@@ -5634,6 +5672,7 @@ def run(host: str = "0.0.0.0", port: int = 8000) -> None:
     signal.signal(signal.SIGINT, _handle_signal)
 
     log.start(f"Listening on http://{host}:{port}")
+    _start_portal_dashboard_bootstrap()
     _auto_register_from_pairing_code()
     _start_mqtt_listener()
     _start_remote_support_manager()
