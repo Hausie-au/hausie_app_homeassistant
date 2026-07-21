@@ -33,6 +33,7 @@ from .core.managers.config_manager import ConfigManager
 from .core.managers.help_message_manager import HelpMessageManager
 from .core.utils.naming import slugify
 from .core.managers.portal_dashboard_manager import PortalDashboardManager
+from .core.managers.sidebar_policy_manager import SidebarPolicyManager
 from .core.device_state import (
     HAUSIE_ADMIN_USERNAME,
     HAUSIE_SUPPORT_USERNAME,
@@ -1887,6 +1888,46 @@ def _normalize_heartbeat_action(action: Any) -> dict[str, Any] | None:
     }
 
 
+def _sync_sidebar_policy_from_heartbeat(payload: dict[str, Any], log) -> bool:
+    policy_payload = payload.get("sidebar_policy")
+    if not isinstance(policy_payload, dict):
+        return False
+    try:
+        policy = SidebarPolicyManager.normalize(policy_payload)
+        state = load_device_state()
+        try:
+            applied_revision = int(state.get("applied_sidebar_policy_revision") or 0)
+        except (TypeError, ValueError):
+            applied_revision = 0
+        if policy.revision <= applied_revision:
+            return False
+
+        token = str(os.getenv("SUPERVISOR_TOKEN") or "").strip()
+        if not token:
+            raise RuntimeError("SUPERVISOR_TOKEN is unavailable")
+        ws_url = str(
+            os.getenv("HAUSIE_SUPERVISOR_WS_URL") or "ws://supervisor/core/websocket"
+        ).strip()
+        ws = _WSClient(ws_url, token)
+        try:
+            configured_users = SidebarPolicyManager.apply(ws, policy)
+        finally:
+            ws.close()
+
+        state["applied_sidebar_policy_revision"] = policy.revision
+        state["sidebar_admin_only_panels"] = list(policy.admin_only)
+        state["last_sidebar_policy_sync_at"] = int(time.time())
+        save_device_state(state)
+        log.ok(
+            f"Sidebar policy revision {policy.revision} applied to "
+            f"{configured_users} local user(s)."
+        )
+        return True
+    except Exception as exc:
+        log.warn(f"Sidebar policy sync failed: {exc}")
+        return False
+
+
 def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None = None) -> None:
     global _HEARTBEAT_ACTION_RUNNING
     global _HEARTBEAT
@@ -1895,6 +1936,7 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
     log = get_logger("heartbeat")
     if license_payload:
         _store_license_payload(license_payload, log)
+    _sync_sidebar_policy_from_heartbeat(payload_data, log)
     if not actions:
         return
     with _HEARTBEAT_ACTION_LOCK:

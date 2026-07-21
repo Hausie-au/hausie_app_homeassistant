@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.88
+
+- Apply a versioned sidebar-visibility policy received through every cloud heartbeat.
+- Keep selected Home Assistant panels visible for `hausie_admin` and hidden for standard users.
+- Persist the applied revision locally so unchanged heartbeats do not repeat Browser Mod updates.
+
 ## 0.2.87
 
 - Create and maintain a storage-managed Hausie Portal webpage dashboard at add-on startup.
