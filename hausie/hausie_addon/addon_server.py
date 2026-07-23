@@ -4768,7 +4768,7 @@ def _render_portal_html() -> str:
       <p class="eyebrow">Hausie local app</p>
       <h1>Hausie is ready</h1>
       <p>Manage your home, plan, and support from the Hausie user portal.</p>
-      <a href="https://portal.hausiehome.com" target="_blank" rel="noopener noreferrer">Open Hausie Portal</a>
+      <a href="https://portal.hausiehome.com/auth" target="_blank" rel="noopener noreferrer">Open Hausie Portal</a>
     </main>
   </body>
 </html>"""
