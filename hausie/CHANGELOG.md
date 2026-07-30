@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.90
+
+- Install Midea AC LAN locally through an authenticated Hausie App Ingress endpoint.
+- Validate and replace the custom component atomically, then restart Home Assistant.
+
 ## 0.2.89
 
 - Route the local Hausie App portal button through `/auth`, matching the managed Portal dashboard.

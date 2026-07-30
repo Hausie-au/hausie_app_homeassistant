@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -12,11 +13,12 @@ import threading
 import time
 import hashlib
 import html
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import requests
 import yaml
 import websocket
@@ -88,8 +90,16 @@ _INGRESS_MUTATION_PATHS = frozenset(
         "/pairing/start",
         "/pairing/stop",
         "/pairing/confirm",
+        "/extras/midea",
     }
 )
+
+_MIDEA_AC_LAN_RELEASE_URL = (
+    "https://github.com/wuwentao/midea_ac_lan/releases/latest/download/midea_ac_lan.zip"
+)
+_MIDEA_MAX_ARCHIVE_BYTES = 10 * 1024 * 1024
+_MIDEA_MAX_EXPANDED_BYTES = 50 * 1024 * 1024
+_MIDEA_MAX_FILES = 2_000
 
 
 def _is_trusted_ingress_request(client_ip: str, headers: Any) -> bool:
@@ -2123,6 +2133,146 @@ def _sync_config_dashboard_from_pi(local_path: Path) -> None:
 
 def _ha_config_root() -> Path:
     return Path(os.getenv("PI_HA_CONFIG_DIR", "/homeassistant")).resolve()
+
+
+def _validate_midea_archive(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+    files: list[zipfile.ZipInfo] = []
+    expanded_bytes = 0
+    for member in archive.infolist():
+        normalized_name = str(member.filename or "").replace("\\", "/")
+        relative_path = PurePosixPath(normalized_name)
+        if (
+            not normalized_name
+            or relative_path.is_absolute()
+            or ".." in relative_path.parts
+        ):
+            raise RuntimeError("Midea release contains an unsafe archive path.")
+        file_type = (member.external_attr >> 16) & 0o170000
+        if file_type == 0o120000:
+            raise RuntimeError("Midea release contains an unsupported symbolic link.")
+        if member.is_dir():
+            continue
+        files.append(member)
+        expanded_bytes += max(0, int(member.file_size))
+        if len(files) > _MIDEA_MAX_FILES:
+            raise RuntimeError("Midea release contains too many files.")
+        if expanded_bytes > _MIDEA_MAX_EXPANDED_BYTES:
+            raise RuntimeError("Midea release is too large after extraction.")
+    if not files:
+        raise RuntimeError("Midea release archive is empty.")
+    return files
+
+
+def _install_midea_ac_lan(
+    *,
+    archive_bytes: bytes | None = None,
+    config_root: Path | None = None,
+) -> dict[str, Any]:
+    log = get_logger("midea")
+    if archive_bytes is None:
+        log.start("Downloading the latest Midea AC LAN release.")
+        response = requests.get(
+            _MIDEA_AC_LAN_RELEASE_URL,
+            headers={"User-Agent": "Hausie-Home-Assistant-Addon"},
+            timeout=(15, 120),
+        )
+        response.raise_for_status()
+        archive_bytes = response.content
+    if not archive_bytes:
+        raise RuntimeError("Midea release download was empty.")
+    if len(archive_bytes) > _MIDEA_MAX_ARCHIVE_BYTES:
+        raise RuntimeError("Midea release archive exceeds the allowed size.")
+
+    root = Path(config_root or _ha_config_root()).resolve()
+    components_dir = root / "custom_components"
+    components_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=".midea-ac-lan-", dir=components_dir))
+    target_dir = components_dir / "midea_ac_lan"
+    backup_dir = components_dir / f".midea-ac-lan-backup-{secrets.token_hex(4)}"
+    component_root: Path | None = None
+    target_replaced = False
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+            for member in _validate_midea_archive(archive):
+                relative_path = PurePosixPath(
+                    str(member.filename or "").replace("\\", "/")
+                )
+                destination = staging_dir.joinpath(*relative_path.parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, destination.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+
+        manifests = []
+        for manifest_path in staging_dir.rglob("manifest.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(manifest, dict) and manifest.get("domain") == "midea_ac_lan":
+                manifests.append((manifest_path, manifest))
+        if len(manifests) != 1:
+            raise RuntimeError(
+                "Midea release does not contain exactly one valid midea_ac_lan component."
+            )
+
+        manifest_path, manifest = manifests[0]
+        component_root = manifest_path.parent
+        if target_dir.exists():
+            target_dir.rename(backup_dir)
+        component_root.rename(target_dir)
+        target_replaced = True
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+        version = str(manifest.get("version") or "unknown").strip() or "unknown"
+        log.ok(f"Midea AC LAN {version} installed locally.")
+        return {
+            "component": "midea_ac_lan",
+            "version": version,
+            "path": str(target_dir),
+        }
+    except Exception:
+        if target_replaced and target_dir.exists():
+            shutil.rmtree(target_dir)
+        if backup_dir.exists() and not target_dir.exists():
+            backup_dir.rename(target_dir)
+        raise
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+
+
+def _schedule_home_assistant_restart() -> bool:
+    if not _resolve_ha_client():
+        return False
+
+    def restart() -> None:
+        time.sleep(2)
+        ha = _resolve_ha_client()
+        if not ha:
+            get_logger("midea").warn(
+                "Midea installed, but Home Assistant restart could not be scheduled."
+            )
+            return
+        try:
+            ha.call_service("homeassistant", "restart", {}, timeout_s=30)
+            get_logger("midea").ok("Home Assistant restart requested.")
+        except Exception as exc:
+            if _ha_restart_exception_is_expected(exc):
+                get_logger("midea").ok("Home Assistant restart requested.")
+            else:
+                get_logger("midea").warn(
+                    f"Midea installed, but Home Assistant restart failed: {exc}"
+                )
+
+    threading.Thread(
+        target=restart,
+        name="hausie-midea-restart",
+        daemon=True,
+    ).start()
+    return True
 
 
 def _ensure_bootstrap_config_dashboard() -> bool:
@@ -5182,6 +5332,21 @@ class _AddonHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": str(exc)})
                 return
             self._send_json(200, {"ok": True, "status": status})
+            return
+
+        if path == "/extras/midea":
+            try:
+                result = _install_midea_ac_lan()
+                result["restart_scheduled"] = _schedule_home_assistant_restart()
+            except (requests.RequestException, zipfile.BadZipFile, RuntimeError) as exc:
+                log.error(f"Midea AC LAN installation failed: {exc}")
+                self._send_json(500, {"ok": False, "error": str(exc)})
+                return
+            except Exception as exc:
+                log.error(f"Midea AC LAN installation failed: {exc}")
+                self._send_json(500, {"ok": False, "error": "Midea installation failed."})
+                return
+            self._send_json(200, {"ok": True, **result})
             return
 
         if path == "/setup/initialize":
