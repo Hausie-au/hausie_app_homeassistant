@@ -1,9 +1,9 @@
 # Changelog
 
-## 0.2.90
+## 0.2.91
 
-- Install Midea AC LAN locally through an authenticated Hausie App Ingress endpoint.
-- Validate and replace the custom component atomically, then restart Home Assistant.
+- Keep optional Midea installation in the external Hausie Setup workflow.
+- Remove Midea download and filesystem installation logic from Hausie App.
 
 ## 0.2.89
 
