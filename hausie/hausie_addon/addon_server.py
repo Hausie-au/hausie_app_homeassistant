@@ -402,11 +402,17 @@ def _resolve_remote_rebuild_plan(
     }
 
 
-def _execute_rebuild_steps(steps: list[str], log) -> None:
+def _execute_rebuild_steps(
+    steps: list[str],
+    log,
+    *,
+    plan_override: str | None = None,
+) -> None:
+    normalized_plan = _normalize_plan_id(plan_override, "") if plan_override else None
     if "create_base" in steps:
-        _run_create_base(manage_activity=False)
+        _run_create_base(plan_override=normalized_plan, manage_activity=False)
     if "create_hausie" in steps:
-        _run_sync_inventory(manage_activity=False)
+        _run_sync_inventory(plan_override=normalized_plan, manage_activity=False)
 
 
 def _resolve_mqtt_enabled() -> bool:
@@ -493,6 +499,7 @@ _PAIRING_LABEL_OPTIONS = [
     Labels.BLIND,
     Labels.BUTTON,
     Labels.COOLING,
+    Labels.REMOTE_CONTROL,
     Labels.HEATING,
     Labels.MOTION,
     Labels.PLANT,
@@ -3186,8 +3193,12 @@ def _run_rebuild_hausie() -> None:
             source = str(plan.get("source") or "unknown")
             reason = str(plan.get("reason") or "unknown")
             log.start(f"Using {source} rebuild plan ({reason}): {', '.join(steps)}.")
-            _execute_rebuild_steps(steps, log)
-            final_plan = str(plan.get("plan") or current_plan or "").strip() or None
+            # Keep the live license plan fixed throughout Repair Hausie. Without an
+            # explicit override, each rebuild sub-step can independently resolve a
+            # stale/default plan and briefly generate the wrong gated assets.
+            authoritative_plan = _normalize_plan_id(current_plan, "") if current_plan else None
+            _execute_rebuild_steps(steps, log, plan_override=authoritative_plan)
+            final_plan = authoritative_plan or str(plan.get("plan") or "").strip() or None
             _update_rebuild_state(state, plan=final_plan, version=current_version)
             _restart_home_assistant(ha, log)
             if helper_snapshot:
