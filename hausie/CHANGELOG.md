@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.92
+
+- Preserve the authoritative licensed plan throughout Repair Hausie rebuild steps.
+- Add the remote-control label to the local pairing label catalogue.
+
 ## 0.2.91
 
 - Keep optional Midea installation in the external Hausie Setup workflow.

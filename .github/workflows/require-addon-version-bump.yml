@@ -1,0 +1,50 @@
+name: Require add-on version bump
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  version-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a new config.yaml version for add-on changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]]; then
+            echo "No comparable base commit; skipping version comparison."
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")"
+          addon_changes="$(printf '%s\n' "${changed_files}" | grep '^hausie/' | grep -Ev '^hausie/(config.yaml|CHANGELOG.md)$' || true)"
+
+          if [[ -z "${addon_changes}" ]]; then
+            echo "No add-on source changes require a version bump."
+            exit 0
+          fi
+
+          old_version="$(git show "${BASE_SHA}:hausie/config.yaml" | sed -n 's/^version: *"\{0,1\}\([^" ]*\)"\{0,1\}$/\1/p' | head -n 1)"
+          new_version="$(sed -n 's/^version: *"\{0,1\}\([^" ]*\)"\{0,1\}$/\1/p' hausie/config.yaml | head -n 1)"
+
+          if [[ -z "${old_version}" || -z "${new_version}" ]]; then
+            echo "Could not read the add-on version from hausie/config.yaml."
+            exit 1
+          fi
+
+          if [[ "${old_version}" == "${new_version}" ]]; then
+            echo "Add-on files changed, but version remains ${new_version}."
+            echo "Increment hausie/config.yaml and update hausie/CHANGELOG.md."
+            exit 1
+          fi
+
+          echo "Add-on version changed from ${old_version} to ${new_version}."
