@@ -8,6 +8,7 @@ class Labels:
     BLIND = "blind" # actionable
     BUTTON = "button"
     COOLING = "cooling" # actionable
+    REMOTE_CONTROL = "remote_control" # actionable
     DEVICES = "devices"
     HEATING = "heating" # actionable
     MOTION = "motion"
@@ -22,6 +23,7 @@ class Labels:
         BLIND,
         BUTTON,
         COOLING,
+        REMOTE_CONTROL,
         DEVICES,
         HEATING,
         MOTION,
@@ -91,6 +93,7 @@ LABELS = (
     Labels.BLIND,
     Labels.BUTTON,
     Labels.COOLING,
+    Labels.REMOTE_CONTROL,
     Labels.DEVICES,
     Labels.HEATING,
     Labels.MOTION,
