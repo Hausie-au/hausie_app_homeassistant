@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.93
+
+- Apply binary cloud artifacts so Home Assistant can receive dashboard images under `/local`.
+- Add responsive light and dark remote-control preview assets to the configuration flow.
+
 ## 0.2.92
 
 - Preserve the authoritative licensed plan throughout Repair Hausie rebuild steps.

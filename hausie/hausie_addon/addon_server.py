@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -797,7 +798,7 @@ def _resolve_local_ha_root() -> Path | None:
     return local_root if local_root.exists() else None
 
 
-def _mirror_local_artifact(local_root: Path | None, rel_path: str, content: str, log) -> bool:
+def _mirror_local_artifact(local_root: Path | None, rel_path: str, content: str | bytes, log) -> bool:
     if not local_root or not rel_path:
         return False
     try:
@@ -807,7 +808,10 @@ def _mirror_local_artifact(local_root: Path | None, rel_path: str, content: str,
         return False
     try:
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_text(str(content), encoding="utf-8")
+        if isinstance(content, bytes):
+            local_path.write_bytes(content)
+        else:
+            local_path.write_text(str(content), encoding="utf-8")
         return True
     except Exception as exc:
         log.warn(f"Local mirror failed for {rel_path}: {exc}")
@@ -2737,13 +2741,26 @@ def _apply_cloud_artifacts(
         content = item.get("content")
         if not rel_path or content is None:
             continue
+        encoding = str(item.get("encoding") or "").strip().lower()
+        try:
+            file_content: str | bytes = (
+                base64.b64decode(str(content), validate=True)
+                if encoding == "base64"
+                else str(content)
+            )
+        except Exception as exc:
+            log.warn(f"Failed to decode cloud artifact {rel_path}: {exc}")
+            continue
         remote_path = rel_path if rel_path.startswith("/") else f"{root}/{rel_path}" if root else rel_path
         path = Path(remote_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(content), encoding="utf-8")
+        if isinstance(file_content, bytes):
+            path.write_bytes(file_content)
+        else:
+            path.write_text(file_content, encoding="utf-8")
         applied[remote_path] = str(content)
         updated_count += 1
-        if _mirror_local_artifact(local_root, rel_path, str(content), log):
+        if _mirror_local_artifact(local_root, rel_path, file_content, log):
             mirrored_count += 1
 
     for rel_path in deletes or []:
