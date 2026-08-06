@@ -1219,7 +1219,7 @@ def _resolve_setup_ingress_path() -> str:
 
 
 def _resolve_hausie_app_info_path() -> str:
-    return _resolve_hausie_app_page_path()
+    return _resolve_hausie_app_path("info")
 
 
 def _normalize_ingress_path(value: str | None) -> str:
@@ -1484,7 +1484,7 @@ def _patch_hausie_app_shortcut(log) -> None:
             for card in section.get("cards") or []:
                 if not isinstance(card, dict) or str(card.get("name") or "").strip() != "Hausie App":
                     continue
-                desired_action = {"action": "url", "url_path": target_path}
+                desired_action = {"action": "navigate", "navigation_path": target_path}
                 if card.get("tap_action") != desired_action:
                     card["tap_action"] = desired_action
                     updated = True
