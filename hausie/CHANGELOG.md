@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.94
+
+- Refresh configuration dashboards with Remote Controls under Automations and Battery under Devices.
+- Apply updated Repair Hausie and Refresh Hausie dashboard icons.
+
 ## 0.2.93
 
 - Apply binary cloud artifacts so Home Assistant can receive dashboard images under `/local`.
