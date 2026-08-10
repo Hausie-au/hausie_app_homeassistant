@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.97
+
+- Keep the visible Hausie plan badge synchronized across Refresh and Repair.
+- Persist the authoritative badge values so a Home Assistant restart cannot restore an older displayed plan.
+
 ## 0.2.94
 
 - Refresh configuration dashboards with Remote Controls under Automations and Battery under Devices.

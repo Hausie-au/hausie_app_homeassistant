@@ -3122,6 +3122,13 @@ def _run_sync_inventory(
                 deletes=response.get("deletes") if isinstance(response, dict) else None,
                 log=log,
             )
+            # Persist the same authoritative badge returned by cloud. Refresh
+            # updates the live helper below, while Repair restarts Home Assistant;
+            # without updating `initial`, that restart can display an older plan.
+            _ensure_plan_text_helper(
+                _ha_config_root(),
+                response.get("plan_badge") if isinstance(response, dict) else None,
+            )
             ui_payload = response.get("ui") if isinstance(response, dict) else None
             if isinstance(ui_payload, dict):
                 dashboard_yaml = ui_payload.get("main_dashboard_yaml")
@@ -3725,28 +3732,34 @@ def _ensure_plan_text_helper(root: Path, plan_badge: dict | None) -> None:
     plan_name = (plan_badge or {}).get("name")
     plan_details = (plan_badge or {}).get("details")
     trial_until = (plan_badge or {}).get("trial_until")
-    updated = False
-    if "hausie_plan_text" not in doc:
-        doc["hausie_plan_text"] = {
+    desired_helpers = {
+        "hausie_plan_text": {
             "name": "Hausie Plan",
             "max": 255,
             "initial": str(plan_name or ""),
-        }
-        updated = True
-    if "hausie_plan_details" not in doc:
-        doc["hausie_plan_details"] = {
+        },
+        "hausie_plan_details": {
             "name": "Hausie Plan Details",
             "max": 255,
             "initial": str(plan_details or ""),
-        }
-        updated = True
-    if "hausie_trial_until" not in doc:
-        doc["hausie_trial_until"] = {
+        },
+        "hausie_trial_until": {
             "name": "Hausie Trial Until",
             "max": 255,
             "initial": str(trial_until or ""),
-        }
-        updated = True
+        },
+    }
+    updated = False
+    for object_id, desired in desired_helpers.items():
+        current = doc.get(object_id)
+        if not isinstance(current, dict):
+            doc[object_id] = desired
+            updated = True
+            continue
+        for key, value in desired.items():
+            if current.get(key) != value:
+                current[key] = value
+                updated = True
     if updated:
         helper_path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
 
