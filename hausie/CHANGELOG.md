@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.100
+
+- Preserve all existing Hausie configuration helper values while Refresh Hausie reloads generated Home Assistant configuration.
+- Keep first-time setup defaults without overriding customer selections on later refreshes.
+
 ## 0.2.99
 
 - Improve the Home Assistant add-on logo with a transparent background and a larger, clearer Hausie wordmark.

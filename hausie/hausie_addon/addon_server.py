@@ -2636,6 +2636,23 @@ def _reload_services(ha: HAClient, log) -> None:
         log.info(summary)
 
 
+def _reload_services_preserving_helper_values(ha: HAClient, log) -> bool:
+    """Reload generated configuration without resetting existing helper values."""
+    snapshot = _snapshot_rebuild_helper_values(ha, _ha_config_root(), log)
+    _reload_services(ha, log)
+    if not snapshot:
+        return False
+    _wait_for_helper_entities_ready(
+        ha,
+        snapshot,
+        log,
+        timeout_s=30,
+        interval_s=1,
+    )
+    _restore_rebuild_helper_values(ha, snapshot, log)
+    return True
+
+
 def _reload_browser_frontends(ha: HAClient, log) -> None:
     try:
         ha.call_service("browser_mod", "window_reload", {})
@@ -3163,7 +3180,7 @@ def _run_sync_inventory(
                             pass
             else:
                 log.warn("UI update skipped: cloud response missing 'ui' payload.")
-            _reload_services(ha, log)
+            preserved_helper_values = _reload_services_preserving_helper_values(ha, log)
             _reload_browser_frontends(ha, log)
             _patch_credentials_shortcut(log)
             _patch_add_device_shortcut(log)
@@ -3176,9 +3193,10 @@ def _run_sync_inventory(
             state["last_inventory_synced_at"] = int(time.time())
             state.pop("inventory_change_pending", None)
             save_device_state(state)
-            enabled = _turn_on_user_helpers(ha)
-            if enabled:
-                log.ok(f"User helpers enabled: {enabled}.")
+            if not preserved_helper_values:
+                enabled = _turn_on_user_helpers(ha)
+                if enabled:
+                    log.ok(f"User helpers enabled: {enabled}.")
 
 
 def _run_create_hausie(*, force_full: bool = False, plan_override: str | None = None) -> None:
