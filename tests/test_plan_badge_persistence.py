@@ -44,13 +44,18 @@ def test_plan_badge_initial_values_are_updated_for_restart(tmp_path: Path) -> No
     )
 
     updated = yaml.safe_load(helper_path.read_text(encoding="utf-8"))
-    assert updated["hausie_plan_text"]["initial"] == "Complete"
-    assert updated["hausie_plan_text"]["icon"] == "mdi:home-heart"
-    assert updated["hausie_plan_details"]["initial"] == "Current plan details"
-    assert updated["hausie_trial_until"]["initial"] == "Aug 31, 2026"
+    assert updated["core_plan_name"]["initial"] == "Complete"
+    assert updated["core_plan_details"]["initial"] == "Current plan details"
+    assert updated["core_plan_trial_until"]["initial"] == "Aug 31, 2026"
+    assert "hausie_plan_text" not in updated
+    assert "hausie_plan_details" not in updated
+    assert "hausie_trial_until" not in updated
 
 
 def test_plan_badge_helpers_are_not_restored_from_pre_repair_snapshot() -> None:
     assert not addon_server._should_persist_rebuild_helper("input_text", "hausie_plan_text")
     assert not addon_server._should_persist_rebuild_helper("input_text", "hausie_plan_details")
     assert not addon_server._should_persist_rebuild_helper("input_text", "hausie_trial_until")
+    assert not addon_server._should_persist_rebuild_helper("input_text", "core_plan_name")
+    assert not addon_server._should_persist_rebuild_helper("input_text", "core_plan_details")
+    assert not addon_server._should_persist_rebuild_helper("input_text", "core_plan_trial_until")

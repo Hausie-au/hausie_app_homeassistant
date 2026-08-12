@@ -9,6 +9,22 @@ import tempfile
 import yaml
 
 from ..io.pi_file_sender import PiFileSender
+from ..utils.hausie_ids import (
+    CORE_SYSTEM_REFRESH,
+    CORE_SYSTEM_REPAIR,
+    CORE_SYSTEM_RESTART,
+    REST_NOTIFICATIONS_PUBLISH,
+    REST_SETUP_DEVICE_CREATE,
+    REST_SETUP_DEVICE_SAVE,
+    REST_SETUP_DEVICES_SCAN,
+    REST_UI_HELP_ROTATE,
+    TEST_SYSTEM_CLEANUP_BASE,
+    TEST_SYSTEM_CLEANUP_HAUSIE,
+    TEST_SYSTEM_CREATE_BASE,
+    TEST_SYSTEM_CREATE_HAUSIE,
+    TEST_SYSTEM_CREATE_TEST,
+    TEST_UI_POPUP_WAIT,
+)
 
 
 @dataclass
@@ -58,6 +74,20 @@ class ConfigManager:
     """Manage Home Assistant configuration.yaml updates."""
 
     _HAUSIE_REST_COMMANDS = {
+        REST_SETUP_DEVICE_CREATE,
+        REST_SETUP_DEVICE_SAVE,
+        REST_SETUP_DEVICES_SCAN,
+        REST_NOTIFICATIONS_PUBLISH,
+        REST_UI_HELP_ROTATE,
+        CORE_SYSTEM_REFRESH,
+        CORE_SYSTEM_REPAIR,
+        CORE_SYSTEM_RESTART,
+        TEST_SYSTEM_CLEANUP_BASE,
+        TEST_SYSTEM_CLEANUP_HAUSIE,
+        TEST_SYSTEM_CREATE_BASE,
+        TEST_SYSTEM_CREATE_HAUSIE,
+        TEST_SYSTEM_CREATE_TEST,
+        TEST_UI_POPUP_WAIT,
         "new_device_create",
         "new_device_save",
         "new_devices_scan",
@@ -79,13 +109,12 @@ class ConfigManager:
         "hausie_update_new_device",
     }
     _HAUSIE_TEST_REST_COMMANDS = {
-        "cleanup_base",
-        "cleanup_hausie",
-        "create_base",
-        "create_hausie",
-        "sync_inventory",
-        "create_test",
-        "test_popup_wait",
+        TEST_SYSTEM_CLEANUP_BASE,
+        TEST_SYSTEM_CLEANUP_HAUSIE,
+        TEST_SYSTEM_CREATE_BASE,
+        TEST_SYSTEM_CREATE_HAUSIE,
+        TEST_SYSTEM_CREATE_TEST,
+        TEST_UI_POPUP_WAIT,
     }
 
     def __init__(
@@ -213,10 +242,27 @@ class ConfigManager:
                 addon_host = addon_host.replace("_", "-")
             addon_url = f"http://{addon_host}:8000"
         if addon_url:
-            for legacy in ("hausie_new_device", "hausie_new_device_save"):
+            for legacy in (
+                "hausie_new_device",
+                "hausie_new_device_save",
+                "new_device_create",
+                "new_device_save",
+                "new_devices_scan",
+                "notify_admins",
+                "ui_help_rotate",
+                "sync_inventory",
+                "rebuild_hausie",
+                "restart_hausie",
+                "cleanup_base",
+                "cleanup_hausie",
+                "create_base",
+                "create_hausie",
+                "create_test",
+                "test_popup_wait",
+            ):
                 existing.pop(legacy, None)
             url = f"{addon_url.rstrip('/')}/new_device"
-            existing["new_device_create"] = {
+            existing[REST_SETUP_DEVICE_CREATE] = {
                 "url": url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -224,7 +270,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             save_url = f"{addon_url.rstrip('/')}/new_device_save"
-            existing["new_device_save"] = {
+            existing[REST_SETUP_DEVICE_SAVE] = {
                 "url": save_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -232,7 +278,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             scan_url = f"{addon_url.rstrip('/')}/new_devices_scan"
-            existing["new_devices_scan"] = {
+            existing[REST_SETUP_DEVICES_SCAN] = {
                 "url": scan_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -240,7 +286,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             notify_admins_url = f"{addon_url.rstrip('/')}/notify_admins"
-            existing["notify_admins"] = {
+            existing[REST_NOTIFICATIONS_PUBLISH] = {
                 "url": notify_admins_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -248,7 +294,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             rotate_url = f"{addon_url.rstrip('/')}/help_messages/rotate"
-            existing["ui_help_rotate"] = {
+            existing[REST_UI_HELP_ROTATE] = {
                 "url": rotate_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -256,7 +302,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             cleanup_base_url = f"{addon_url.rstrip('/')}/cleanup/base"
-            existing["cleanup_base"] = {
+            existing[TEST_SYSTEM_CLEANUP_BASE] = {
                 "url": cleanup_base_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -264,7 +310,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             cleanup_hausie_url = f"{addon_url.rstrip('/')}/cleanup/hausie"
-            existing["cleanup_hausie"] = {
+            existing[TEST_SYSTEM_CLEANUP_HAUSIE] = {
                 "url": cleanup_hausie_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -272,7 +318,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             create_base_url = f"{addon_url.rstrip('/')}/run/create_base"
-            existing["create_base"] = {
+            existing[TEST_SYSTEM_CREATE_BASE] = {
                 "url": create_base_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -280,7 +326,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             create_hausie_url = f"{addon_url.rstrip('/')}/run/create_hausie"
-            existing["create_hausie"] = {
+            existing[TEST_SYSTEM_CREATE_HAUSIE] = {
                 "url": create_hausie_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -288,7 +334,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             sync_inventory_url = f"{addon_url.rstrip('/')}/run/sync_inventory"
-            existing["sync_inventory"] = {
+            existing[CORE_SYSTEM_REFRESH] = {
                 "url": sync_inventory_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -296,7 +342,7 @@ class ConfigManager:
                 "timeout": 180,
             }
             rebuild_hausie_url = f"{addon_url.rstrip('/')}/run/rebuild_hausie"
-            existing["rebuild_hausie"] = {
+            existing[CORE_SYSTEM_REPAIR] = {
                 "url": rebuild_hausie_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -304,7 +350,7 @@ class ConfigManager:
                 "timeout": 300,
             }
             restart_hausie_url = f"{addon_url.rstrip('/')}/run/restart_hausie"
-            existing["restart_hausie"] = {
+            existing[CORE_SYSTEM_RESTART] = {
                 "url": restart_hausie_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -312,7 +358,7 @@ class ConfigManager:
                 "timeout": 300,
             }
             create_test_url = f"{addon_url.rstrip('/')}/run/create_test"
-            existing["create_test"] = {
+            existing[TEST_SYSTEM_CREATE_TEST] = {
                 "url": create_test_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -322,7 +368,7 @@ class ConfigManager:
         cloud_url = os.getenv("HAUSIE_CLOUD_URL", "").strip()
         if cloud_url:
             test_popup_url = f"{cloud_url.rstrip('/')}/api/TEST_POPUP/wait"
-            existing["test_popup_wait"] = {
+            existing[TEST_UI_POPUP_WAIT] = {
                 "url": test_popup_url,
                 "method": "POST",
                 "content_type": "application/json",
@@ -470,6 +516,14 @@ class ConfigManager:
             for key, (tag, value) in include_map.items():
                 current = config_doc.get(key)
                 if isinstance(current, _TaggedValue) and current.tag == tag and current.value == value:
+                    config_doc.pop(key, None)
+                    changed = True
+
+            # Hausie only creates these shared sections when they are absent and
+            # writes them as empty mappings. Remove only that exact shape; a
+            # customer-owned section with settings must always be preserved.
+            for key in ("cloud", "recorder", "history"):
+                if config_doc.get(key) == {}:
                     config_doc.pop(key, None)
                     changed = True
 

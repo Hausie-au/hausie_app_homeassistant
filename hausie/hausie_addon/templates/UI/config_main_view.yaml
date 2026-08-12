@@ -55,7 +55,7 @@ sections:
       - show_name: true
         show_icon: true
         type: button
-        entity: input_button.core_sync_inventory
+        entity: input_button.core_system_refresh
         grid_options:
           columns: 12
           rows: 2
@@ -117,7 +117,7 @@ sections:
                                 Refreshing Hausie. Please wait while devices, rooms,
                                 groups, dashboards, and automations are updated.
                               text_only: true
-                    - service: rest_command.sync_inventory
+                    - service: rest_command.core_system_refresh
                     - service: browser_mod.close_popup
                     - service: browser_mod.popup
                       data:
@@ -186,7 +186,7 @@ sections:
       - show_name: true
         show_icon: true
         type: button
-        entity: input_button.core_rebuild_hausie
+        entity: input_button.core_system_repair
         name: Repair Hausie
         icon: mdi:home-assistant
         tap_action:
@@ -246,7 +246,7 @@ sections:
                                 Repairing Hausie. Please wait while rooms, devices,
                                 groups, dashboards, helpers, and automations are rebuilt.
                               text_only: true
-                    - service: rest_command.rebuild_hausie
+                    - service: rest_command.core_system_repair
                     - service: browser_mod.close_popup
                     - service: browser_mod.popup
                       data:
@@ -299,7 +299,7 @@ badges:
     show_state: true
     show_icon: true
     name: Hausie Plan
-    entity: input_text.hausie_plan_text
+    entity: input_text.core_plan_name
     icon: mdi:home-heart
     color: primary
     tap_action:
@@ -310,7 +310,7 @@ badges:
           title: Hausie plan
           content:
             type: markdown
-            content: "{{ states('input_text.hausie_plan_details') }}"
+            content: "{{ states('input_text.core_plan_details') }}"
             text_only: true
           left_button: Back
           left_button_action:
@@ -321,14 +321,14 @@ badges:
     show_state: true
     show_icon: true
     name: Free trial until
-    entity: input_text.hausie_trial_until
+    entity: input_text.core_plan_trial_until
     icon: mdi:calendar-clock
     visibility:
       - condition: state
-        entity: input_text.hausie_trial_until
+        entity: input_text.core_plan_trial_until
         state_not: ""
   - type: entity
-    entity: input_boolean.allow_remote_support
+    entity: input_boolean.core_remote_support_enabled
     show_name: true
     show_state: true
     show_icon: true
@@ -355,7 +355,7 @@ badges:
                     text_only: true
                   - type: glance
                     entities:
-                      - entity: input_boolean.allow_remote_support
+                      - entity: input_boolean.core_remote_support_enabled
                         icon: mdi:face-agent
                         tap_action:
                           action: toggle

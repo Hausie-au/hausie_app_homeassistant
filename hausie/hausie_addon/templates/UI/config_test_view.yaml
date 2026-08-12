@@ -16,7 +16,7 @@ sections:
       - show_name: true
         show_icon: true
         type: button
-        entity: input_button.cleanup_base_assets
+        entity: input_button.test_system_cleanup_base
         grid_options:
           columns: 12
           rows: 2
@@ -26,11 +26,11 @@ sections:
           action: call-service
           service: input_button.press
           data:
-            entity_id: input_button.cleanup_base_assets
+            entity_id: input_button.test_system_cleanup_base
       - show_name: true
         show_icon: true
         type: button
-        entity: input_button.cleanup_hausie_assets
+        entity: input_button.test_system_cleanup_hausie
         grid_options:
           columns: 12
           rows: 2
@@ -40,11 +40,11 @@ sections:
           action: call-service
           service: input_button.press
           data:
-            entity_id: input_button.cleanup_hausie_assets
+            entity_id: input_button.test_system_cleanup_hausie
       - show_name: true
         show_icon: true
         type: button
-        entity: input_button.test_create_base
+        entity: input_button.test_system_create_base
         grid_options:
           columns: 12
           rows: 2
@@ -54,11 +54,11 @@ sections:
           action: call-service
           service: input_button.press
           data:
-            entity_id: input_button.test_create_base
+            entity_id: input_button.test_system_create_base
       - show_name: true
         show_icon: true
         type: button
-        entity: input_button.test_create_hausie
+        entity: input_button.test_system_create_hausie
         grid_options:
           columns: 12
           rows: 2
@@ -68,11 +68,11 @@ sections:
           action: call-service
           service: input_button.press
           data:
-            entity_id: input_button.test_create_hausie
+            entity_id: input_button.test_system_create_hausie
       - show_name: true
         show_icon: true
         type: button
-        entity: input_button.test_rebuild_all
+        entity: input_button.test_system_rebuild_all
         grid_options:
           columns: 12
           rows: 2
@@ -81,7 +81,7 @@ sections:
       - show_name: true
         show_icon: true
         type: button
-        entity: input_button.test_popup_update
+        entity: input_button.test_ui_popup_update
         grid_options:
           columns: 12
           rows: 2
@@ -102,7 +102,7 @@ sections:
                       type: markdown
                       content: "Loading..."
                       text_only: true
-                - service: rest_command.test_popup_wait
+                - service: rest_command.test_ui_popup_wait
                 - service: browser_mod.close_popup
                   data:
                     browser_id: all
@@ -123,7 +123,7 @@ sections:
           action: call-service
           service: input_button.press
           data:
-            entity_id: input_button.test_rebuild_all
+            entity_id: input_button.test_system_rebuild_all
 header:
   layout: start
   card:

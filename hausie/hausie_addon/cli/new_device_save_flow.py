@@ -9,8 +9,9 @@ import websocket  # pip install websocket-client
 
 from ..settings import Settings
 from ..core.flow_logger import get_logger
+from ..core.utils.hausie_ids import SETUP_DEVICE_SAVE, entity_id
 
-TARGET_SAVE_ENTITY = "input_button.new_device_save"
+TARGET_SAVE_ENTITY = entity_id("input_button", SETUP_DEVICE_SAVE)
 log = get_logger("new_device")
 
 
@@ -80,7 +81,7 @@ def main(argv: list[str] | None = None) -> None:
     ws = _WSClient(settings.HA_WS_URL, settings.HA_TOKEN)
     ws.connect()
     sub_id = ws.subscribe("state_changed")
-    log.start("Waiting for input_button.new_device_save...")
+    log.start(f"Waiting for {TARGET_SAVE_ENTITY}...")
     try:
         while True:
             try:

@@ -7,9 +7,10 @@ import websocket  # pip install websocket-client
 
 from ..settings import Settings
 from ..core.flow_logger import get_logger
+from ..core.utils.hausie_ids import CORE_SYSTEM_REPAIR, entity_id
 from ..cli_v2.restart_hausie import main as restart_main
 
-TARGET_RECONFIG_ENTITY = "input_button.core_rebuild_hausie"
+TARGET_RECONFIG_ENTITY = entity_id("input_button", CORE_SYSTEM_REPAIR)
 
 
 @dataclass
@@ -71,7 +72,7 @@ def main() -> None:
     ws = _WSClient(settings.HA_WS_URL, settings.HA_TOKEN)
     ws.connect()
     sub_id = ws.subscribe("state_changed")
-    log.start("Waiting for input_button.core_rebuild_hausie...")
+    log.start(f"Waiting for {TARGET_RECONFIG_ENTITY}...")
     in_progress = False
     try:
         while True:

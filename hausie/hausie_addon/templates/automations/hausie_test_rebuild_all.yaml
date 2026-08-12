@@ -4,7 +4,7 @@ trigger:
   - platform: state
     entity_id: "{{ trigger_entity }}"
 action:
-  - service: rest_command.cleanup_base
-  - service: rest_command.cleanup_hausie
-  - service: rest_command.create_base
-  - service: rest_command.create_hausie
+  - service: rest_command.test_system_cleanup_base
+  - service: rest_command.test_system_cleanup_hausie
+  - service: rest_command.test_system_create_base
+  - service: rest_command.test_system_create_hausie

@@ -33,6 +33,24 @@ from .core.remote_support import RemoteSupportManager, _load_public_keys
 from .core.managers.config_manager import ConfigManager
 from .core.managers.help_message_manager import HelpMessageManager
 from .core.utils.naming import slugify
+from .core.utils.hausie_ids import (
+    CORE_PLAN_DETAILS,
+    CORE_PLAN_NAME,
+    CORE_PLAN_TRIAL_UNTIL,
+    CORE_REMOTE_SUPPORT_ENABLED,
+    CORE_SYSTEM_BUSY,
+    CORE_SYSTEM_REFRESH,
+    CORE_SYSTEM_REPAIR,
+    CORE_SYSTEM_RESTART,
+    CORE_SYSTEM_STATUS,
+    SETUP_DEVICE_AREA,
+    SETUP_DEVICE_FOUND,
+    SETUP_DEVICE_ID,
+    SETUP_DEVICE_LABEL,
+    SETUP_DEVICE_NAME,
+    SETUP_DEVICE_SAVE,
+    entity_id,
+)
 from .core.managers.portal_dashboard_manager import PortalDashboardManager
 from .core.managers.sidebar_policy_manager import SidebarPolicyManager
 from .core.device_state import (
@@ -416,6 +434,23 @@ def _execute_rebuild_steps(
         _run_sync_inventory(plan_override=normalized_plan, manage_activity=False)
 
 
+def _execute_clean_repair(*, plan_override: str | None = None) -> None:
+    """Remove all Hausie-managed assets and rebuild them from the live HA inventory."""
+    normalized_plan = _normalize_plan_id(plan_override, "") if plan_override else None
+    _cleanup_base_assets(preserve_test_assets=False)
+    _cleanup_hausie_assets(destructive_reset=True, preserve_test_assets=False)
+    _run_create_base(
+        force_full=True,
+        plan_override=normalized_plan,
+        manage_activity=False,
+    )
+    _run_sync_inventory(
+        force_full=True,
+        plan_override=normalized_plan,
+        manage_activity=False,
+    )
+
+
 def _resolve_mqtt_enabled() -> bool:
     return os.getenv("HAUSIE_MQTT_ENABLE", "").strip().lower() in {"1", "true", "yes"}
 
@@ -434,59 +469,6 @@ _LICENSE_MONITOR_THREAD: threading.Thread | None = None
 _LICENSE_MONITOR_STOP = threading.Event()
 _INVENTORY_MONITOR_THREAD: threading.Thread | None = None
 _INVENTORY_MONITOR_STOP = threading.Event()
-
-_BASE_AUTOMATION_IDS = {
-    "new_device_created",
-    "new_device_saved",
-    "ui_help_rotate_messages",
-    "new_devices_scan_daily",
-    "core_sync_inventory",
-    "core_rebuild_hausie",
-    "core_restart_hausie",
-}
-
-_KEEP_AUTOMATION_IDS = {
-    *sorted(_BASE_AUTOMATION_IDS),
-    "cleanup_base_assets",
-    "cleanup_hausie_assets",
-    "test_create_base",
-    "test_create_hausie",
-    "test_rebuild_all",
-}
-
-_BASE_HELPER_FILES = [
-    ("input_button", "hausie_input_button_general.yaml"),
-    ("input_boolean", "hausie_input_boolean_general.yaml"),
-    ("input_number", "hausie_input_number_general.yaml"),
-    ("input_select", "hausie_input_select_general.yaml"),
-    ("input_text", "hausie_input_text_general.yaml"),
-    ("input_datetime", "hausie_input_datetime_general.yaml"),
-    ("input_boolean", "hausie_input_boolean.dashboards.yaml"),
-    ("input_text", "hausie_input_text.dashboards.yaml"),
-    ("input_button", "input_button_general.yaml"),
-    ("input_boolean", "input_boolean_general.yaml"),
-    ("input_number", "input_number_general.yaml"),
-    ("input_select", "input_select_general.yaml"),
-    ("input_text", "input_text_general.yaml"),
-    ("input_datetime", "input_datetime_general.yaml"),
-    ("input_boolean", "input_boolean.dashboards.yaml"),
-    ("input_text", "input_text.dashboards.yaml"),
-]
-
-_BASE_HELPER_KEEP_FILES = {
-    ("input_button", "hausie_input_button_general.yaml"),
-    ("input_button", "input_button_general.yaml"),
-    ("input_boolean", "hausie_input_boolean_general.yaml"),
-    ("input_boolean", "hausie_input_boolean.dashboards.yaml"),
-    ("input_boolean", "input_boolean.dashboards.yaml"),
-    ("input_text", "hausie_input_text.dashboards.yaml"),
-    ("input_text", "input_text.dashboards.yaml"),
-}
-
-_BASE_SCRIPT_KEEP_FILES = {
-    "hausie_general_scripts.yaml",
-    "general_scripts.yaml",
-}
 
 _CONFIG_DASHBOARD_FILENAME = "hausie_configuration_dashboard.yaml"
 _TEST_DASHBOARD_FILENAME = "hausie_test_dashboard.yaml"
@@ -883,7 +865,10 @@ def _start_remote_support_manager() -> None:
     if not ha:
         get_logger("support").warn("Remote support disabled: HA_TOKEN not set.")
         return
-    toggle_entity = os.getenv("HAUSIE_SUPPORT_TOGGLE_ENTITY", "input_boolean.allow_remote_support")
+    toggle_entity = os.getenv(
+        "HAUSIE_SUPPORT_TOGGLE_ENTITY",
+        entity_id("input_boolean", CORE_REMOTE_SUPPORT_ENABLED),
+    )
     auth_keys_path = os.getenv("HAUSIE_SUPPORT_AUTH_KEYS_PATH", "/homeassistant/ssh/authorized_keys")
     timeout_min = int(os.getenv("HAUSIE_SUPPORT_TIMEOUT_MINUTES", "15"))
     poll_s = int(os.getenv("HAUSIE_SUPPORT_POLL_SECONDS", "10"))
@@ -1722,7 +1707,7 @@ def _set_hausie_system_state(ha: HAClient | None, *, busy: bool, status: str) ->
             "input_text",
             "set_value",
             {
-                "entity_id": "input_text.hausie_system_status",
+                "entity_id": entity_id("input_text", CORE_SYSTEM_STATUS),
                 "value": str(status or "Idle"),
             },
         )
@@ -1732,7 +1717,7 @@ def _set_hausie_system_state(ha: HAClient | None, *, busy: bool, status: str) ->
         ha.call_service(
             "input_boolean",
             "turn_on" if busy else "turn_off",
-            {"entity_id": "input_boolean.hausie_system_busy"},
+            {"entity_id": entity_id("input_boolean", CORE_SYSTEM_BUSY)},
         )
     except Exception:
         pass
@@ -2210,28 +2195,23 @@ def _filter_config_views(path: Path, keep_predicate) -> bool:
     return True
 
 
-def _cleanup_base_assets() -> dict[str, object]:
+def _cleanup_base_assets(*, preserve_test_assets: bool = True) -> dict[str, object]:
     removed: list[str] = []
     updated: list[str] = []
     root = _ha_config_root()
 
-    for input_type, filename in _BASE_HELPER_FILES:
-        if (input_type, filename) in _BASE_HELPER_KEEP_FILES:
-            continue
-        _remove_file(root / "helpers" / input_type / filename, removed)
-
-    for automation_id in _BASE_AUTOMATION_IDS:
-        _remove_file(root / "automations" / f"hausie_automation_{automation_id}.yaml", removed)
-        _remove_file(root / "automations" / f"automation_{automation_id}.yaml", removed)
-
-    scripts_dir = root / "scripts"
-    if scripts_dir.exists():
-        for path in scripts_dir.glob("*.yaml"):
-            if path.name in _BASE_SCRIPT_KEEP_FILES:
-                continue
+    # File ownership is determined exclusively by the Hausie prefix. Never
+    # remove an unprefixed file merely because it lives in a managed folder.
+    helpers_dir = root / "helpers"
+    if helpers_dir.exists():
+        for path in helpers_dir.rglob("hausie_*.yaml"):
             _remove_file(path, removed)
-    _remove_file(root / "switches" / "hausie_switch_general.yaml", removed)
-    _remove_file(root / "switches" / "switch_general.yaml", removed)
+
+    for folder in ("automations", "scripts", "switches"):
+        target_dir = root / folder
+        if target_dir.exists():
+            for path in target_dir.glob("hausie_*.yaml"):
+                _remove_file(path, removed)
 
     config_path = os.getenv("PI_CONFIG_PATH", "/homeassistant/configuration.yaml").strip()
     if config_path:
@@ -2246,7 +2226,7 @@ def _cleanup_base_assets() -> dict[str, object]:
                 remove_rest_commands=True,
                 remove_includes=False,
                 remove_shell_commands=False,
-                keep_test_assets=True,
+                keep_test_assets=preserve_test_assets,
             ):
                 updated.append(config_path)
         except Exception:
@@ -2255,48 +2235,21 @@ def _cleanup_base_assets() -> dict[str, object]:
     return {"removed": removed, "updated": updated}
 
 
-def _cleanup_hausie_assets(*, destructive_reset: bool = False) -> dict[str, object]:
+def _cleanup_hausie_assets(
+    *,
+    destructive_reset: bool = False,
+    preserve_test_assets: bool = True,
+) -> dict[str, object]:
     removed: list[str] = []
     updated: list[str] = []
     log = get_logger("addon")
     root = _ha_config_root()
 
-    automations_dir = root / "automations"
-    if automations_dir.exists():
-        for path in automations_dir.glob("hausie_automation_*.yaml"):
-            automation_id = path.stem.replace("hausie_automation_", "", 1)
-            if automation_id in _KEEP_AUTOMATION_IDS:
-                continue
-            _remove_file(path, removed)
-        legacy_ids = _collect_registry_automation_ids(root)
-        for automation_id in sorted(legacy_ids):
-            if automation_id in _KEEP_AUTOMATION_IDS:
-                continue
-            _remove_file(automations_dir / f"automation_{automation_id}.yaml", removed)
-
-    groups_dir = root / "groups"
-    if groups_dir.exists():
-        for path in groups_dir.glob("*.yaml"):
-            _remove_file(path, removed)
-
-    covers_dir = root / "covers"
-    if covers_dir.exists():
-        for path in covers_dir.glob("*.yaml"):
-            _remove_file(path, removed)
-
-    scripts_dir = root / "scripts"
-    if scripts_dir.exists():
-        for path in scripts_dir.glob("*.yaml"):
-            if path.name == "hausie_general_scripts.yaml":
-                continue
-            _remove_file(path, removed)
-
-    switches_dir = root / "switches"
-    if switches_dir.exists():
-        for path in switches_dir.glob("*.yaml"):
-            if path.name == "hausie_switch_general.yaml":
-                continue
-            _remove_file(path, removed)
+    for folder in ("automations", "groups", "covers", "scripts", "switches"):
+        target_dir = root / folder
+        if target_dir.exists():
+            for path in target_dir.glob("hausie_*.yaml"):
+                _remove_file(path, removed)
 
     _remove_file(root / "dashboards" / _MAIN_DASHBOARD_FILENAME, removed)
 
@@ -2317,7 +2270,10 @@ def _cleanup_hausie_assets(*, destructive_reset: bool = False) -> dict[str, obje
                     config_path=config_path,
                     require_remote=False,
                 )
-                if manager.remove_hausie_entries(keep_test_assets=True):
+                if manager.remove_hausie_entries(
+                    keep_test_dashboard=preserve_test_assets,
+                    keep_test_assets=preserve_test_assets,
+                ):
                     updated.append(config_path)
             except Exception:
                 pass
@@ -2385,10 +2341,10 @@ def _normalize_select_value(value: str) -> str:
 def _read_new_device_inputs(ha: HAClient) -> dict[str, str]:
     states = ha.get_states()
     return {
-        "device_id": _normalize_select_value(_get_state_value(states, "input_text.new_device_device_id")),
-        "name": _normalize_select_value(_get_state_value(states, "input_text.new_device_name")),
-        "label": _normalize_select_value(_get_state_value(states, "input_select.new_device_label")),
-        "area": _normalize_select_value(_get_state_value(states, "input_select.new_device_area")),
+        "device_id": _normalize_select_value(_get_state_value(states, entity_id("input_text", SETUP_DEVICE_ID))),
+        "name": _normalize_select_value(_get_state_value(states, entity_id("input_text", SETUP_DEVICE_NAME))),
+        "label": _normalize_select_value(_get_state_value(states, entity_id("input_select", SETUP_DEVICE_LABEL))),
+        "area": _normalize_select_value(_get_state_value(states, entity_id("input_select", SETUP_DEVICE_AREA))),
     }
 
 
@@ -3195,35 +3151,15 @@ def _run_rebuild_hausie() -> None:
             ha = HAClient(ha_url_ws=settings.HA_WS_URL, ha_url_rest=settings.HA_REST_URL, token=settings.HA_TOKEN)
             helper_snapshot = _snapshot_rebuild_helper_values(ha, _ha_config_root(), log)
             state = load_device_state()
-            last_plan = str(state.get("last_plan") or "").strip().lower()
-            last_version = str(state.get("last_addon_version") or "").strip()
             current_license = _sync_license_state_from_cloud(settings, log, force=True)
             current_plan = str(current_license.get("plan") or "").strip() or _resolve_subscription_plan(settings)
             current_version = _resolve_addon_version()
-            plan = _resolve_remote_rebuild_plan(
-                settings,
-                state=state,
-                current_plan=current_plan,
-                current_version=current_version,
-            )
-            if plan is None:
-                plan = _resolve_local_rebuild_plan(
-                    current_plan=current_plan,
-                    current_version=current_version,
-                    last_plan=last_plan,
-                    last_version=last_version,
-                )
-            steps = _normalize_rebuild_steps(plan.get("execution_plan"))
-            source = str(plan.get("source") or "unknown")
-            reason = str(plan.get("reason") or "unknown")
-            log.start(f"Using {source} rebuild plan ({reason}): {', '.join(steps)}.")
-            # Keep the live license plan fixed throughout Repair Hausie. Without an
-            # explicit override, each rebuild sub-step can independently resolve a
-            # stale/default plan and briefly generate the wrong gated assets.
+            log.start("Removing all Hausie-managed assets before rebuilding.")
+            # Repair is deliberately destructive for Hausie-managed files. Refresh
+            # remains the incremental flow and never calls this cleanup routine.
             authoritative_plan = _normalize_plan_id(current_plan, "") if current_plan else None
-            _execute_rebuild_steps(steps, log, plan_override=authoritative_plan)
-            final_plan = authoritative_plan or str(plan.get("plan") or "").strip() or None
-            _update_rebuild_state(state, plan=final_plan, version=current_version)
+            _execute_clean_repair(plan_override=authoritative_plan)
+            _update_rebuild_state(state, plan=authoritative_plan, version=current_version)
             _restart_home_assistant(ha, log)
             if helper_snapshot:
                 _wait_for_home_assistant_ready(ha, log)
@@ -3256,7 +3192,8 @@ def _run_create_base(
             try:
                 states = ha.get_states()
                 computed_force_full = not any(
-                    isinstance(state, dict) and state.get("entity_id") == "input_text.hausie_plan_text"
+                    isinstance(state, dict)
+                    and state.get("entity_id") == entity_id("input_text", CORE_PLAN_NAME)
                     for state in states or []
                 )
             except Exception:
@@ -3347,15 +3284,13 @@ def _run_restart_hausie() -> None:
     log = get_logger("addon")
     with _workflow_activity("Restarting Hausie", manage_lock=True):
         with log.script("restart_hausie"):
-            _cleanup_base_assets()
-            _cleanup_hausie_assets(destructive_reset=True)
-            _run_create_base(force_full=True, manage_activity=False)
-            _run_sync_inventory(force_full=True, manage_activity=False)
             settings = Settings()
+            current_plan = _resolve_subscription_plan(settings)
+            _execute_clean_repair(plan_override=current_plan)
             state = load_device_state()
             _update_rebuild_state(
                 state,
-                plan=_resolve_subscription_plan(settings),
+                plan=current_plan,
                 version=_resolve_addon_version(),
             )
 
@@ -3616,7 +3551,7 @@ def _scan_unlabeled_devices() -> tuple[int, int]:
         dashboard_path = resolve_config_dashboard_path()
         _sync_config_dashboard_to_pi(dashboard_path)
         try:
-            ha.set_input_boolean("input_boolean.new_device_found", "on")
+            ha.set_input_boolean(entity_id("input_boolean", SETUP_DEVICE_FOUND), "on")
         except Exception:
             pass
     return total, updated
@@ -3700,18 +3635,18 @@ def _apply_plan_badge(ha: HAClient, plan_badge: dict | None) -> None:
         ha.call_service(
             "input_text",
             "set_value",
-            {"entity_id": "input_text.hausie_plan_text", "value": str(name)},
+            {"entity_id": entity_id("input_text", CORE_PLAN_NAME), "value": str(name)},
         )
     if details is not None:
         ha.call_service(
             "input_text",
             "set_value",
-            {"entity_id": "input_text.hausie_plan_details", "value": str(details)},
+            {"entity_id": entity_id("input_text", CORE_PLAN_DETAILS), "value": str(details)},
         )
     ha.call_service(
         "input_text",
         "set_value",
-        {"entity_id": "input_text.hausie_trial_until", "value": str(trial_until or "")},
+        {"entity_id": entity_id("input_text", CORE_PLAN_TRIAL_UNTIL), "value": str(trial_until or "")},
     )
 
 
@@ -3733,23 +3668,27 @@ def _ensure_plan_text_helper(root: Path, plan_badge: dict | None) -> None:
     plan_details = (plan_badge or {}).get("details")
     trial_until = (plan_badge or {}).get("trial_until")
     desired_helpers = {
-        "hausie_plan_text": {
+        CORE_PLAN_NAME: {
             "name": "Hausie Plan",
             "max": 255,
             "initial": str(plan_name or ""),
         },
-        "hausie_plan_details": {
+        CORE_PLAN_DETAILS: {
             "name": "Hausie Plan Details",
             "max": 255,
             "initial": str(plan_details or ""),
         },
-        "hausie_trial_until": {
+        CORE_PLAN_TRIAL_UNTIL: {
             "name": "Hausie Trial Until",
             "max": 255,
             "initial": str(trial_until or ""),
         },
     }
     updated = False
+    for legacy_id in ("hausie_plan_text", "hausie_plan_details", "hausie_trial_until"):
+        if legacy_id in doc:
+            doc.pop(legacy_id, None)
+            updated = True
     for object_id, desired in desired_helpers.items():
         current = doc.get(object_id)
         if not isinstance(current, dict):
@@ -3774,14 +3713,19 @@ def _ensure_remote_support_helper(root: Path) -> bool:
         doc = {}
     if not isinstance(doc, dict):
         doc = {}
+    updated = False
     if "allow_remote_support" in doc:
-        return False
-    doc["allow_remote_support"] = {
-        "name": "Remote Support",
-        "initial": "off",
-    }
-    helper_path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
-    return True
+        doc.pop("allow_remote_support", None)
+        updated = True
+    if CORE_REMOTE_SUPPORT_ENABLED not in doc:
+        doc[CORE_REMOTE_SUPPORT_ENABLED] = {
+            "name": "Remote Support",
+            "initial": "off",
+        }
+        updated = True
+    if updated:
+        helper_path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return updated
 
 
 def _turn_on_user_helpers(ha: HAClient) -> int:
@@ -3815,6 +3759,16 @@ _REBUILD_PERSIST_HELPER_DOMAINS = (
 )
 
 _REBUILD_PERSIST_EXACT = {
+    entity_id("input_boolean", SETUP_DEVICE_FOUND),
+    entity_id("input_text", CORE_PLAN_NAME),
+    entity_id("input_text", CORE_PLAN_DETAILS),
+    entity_id("input_text", CORE_PLAN_TRIAL_UNTIL),
+    entity_id("input_text", SETUP_DEVICE_NAME),
+    entity_id("input_text", SETUP_DEVICE_ID),
+    entity_id("input_select", SETUP_DEVICE_LABEL),
+    entity_id("input_select", SETUP_DEVICE_AREA),
+    # Prevent a migration Repair from restoring retired v1 helpers after the
+    # clean rebuild has generated their canonical replacements.
     "input_boolean.new_device_found",
     "input_text.hausie_plan_text",
     "input_text.hausie_plan_details",
@@ -5315,7 +5269,7 @@ class _AddonHandler(BaseHTTPRequestHandler):
             try:
                 ha = _resolve_ha_client()
                 if ha:
-                    ha.set_input_boolean("input_boolean.new_device_found", "on")
+                    ha.set_input_boolean(entity_id("input_boolean", SETUP_DEVICE_FOUND), "on")
             except Exception as exc:
                 self._send_json(500, {"error": f"new_device_found update failed: {exc}"})
                 return

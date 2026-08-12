@@ -4,6 +4,15 @@ from pathlib import Path
 from typing import Any, Dict
 import yaml
 
+from ..core.utils.hausie_ids import (
+    SETUP_DEVICE_AREA,
+    SETUP_DEVICE_ID,
+    SETUP_DEVICE_LABEL,
+    SETUP_DEVICE_NAME,
+    SETUP_DEVICE_SAVE,
+    entity_id as ha_entity_id,
+)
+
 PKG_DIR = Path(__file__).resolve().parents[1]
 ROOT_DIR = PKG_DIR.parent
 
@@ -95,16 +104,16 @@ def build_new_device_popup_card(device_id: str, entity_id: str, device_name: str
                 "type": "entities",
                 "entities": [
                     {
-                        "entity": "input_text.new_device_name",
+                        "entity": ha_entity_id("input_text", SETUP_DEVICE_NAME),
                         "name": "Name",
                         "secondary_info": "none",
                     },
                     {
-                        "entity": "input_select.new_device_label",
+                        "entity": ha_entity_id("input_select", SETUP_DEVICE_LABEL),
                         "name": "Label",
                     },
                     {
-                        "entity": "input_select.new_device_area",
+                        "entity": ha_entity_id("input_select", SETUP_DEVICE_AREA),
                         "name": "Area",
                     },
                 ],
@@ -120,11 +129,11 @@ def build_new_device_popup_card(device_id: str, entity_id: str, device_name: str
     sequence = [
         {
             "service": "input_text.set_value",
-            "data": {"entity_id": "input_text.new_device_device_id", "value": device_id},
+            "data": {"entity_id": ha_entity_id("input_text", SETUP_DEVICE_ID), "value": device_id},
         },
         {
             "service": "input_text.set_value",
-            "data": {"entity_id": "input_text.new_device_name", "value": name},
+            "data": {"entity_id": ha_entity_id("input_text", SETUP_DEVICE_NAME), "value": name},
         },
         {
             "service": "browser_mod.popup",
@@ -143,7 +152,7 @@ def build_new_device_popup_card(device_id: str, entity_id: str, device_name: str
                         "sequence": [
                             {
                                 "service": "input_button.press",
-                                "data": {"entity_id": "input_button.new_device_save"},
+                                "data": {"entity_id": ha_entity_id("input_button", SETUP_DEVICE_SAVE)},
                             },
                             {"service": "browser_mod.close_popup"},
                         ]
