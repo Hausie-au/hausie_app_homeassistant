@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.98
+
+- Standardize Hausie-owned Home Assistant IDs across helpers, automations, dashboards, and REST commands.
+- Make Repair Hausie remove and cleanly rebuild only Hausie-managed assets while Refresh remains incremental.
+- Use stable, non-PII user permission IDs and preserve customer-owned configuration files.
+
 ## 0.2.97
 
 - Keep the visible Hausie plan badge synchronized across Refresh and Repair.
