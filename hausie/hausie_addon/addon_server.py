@@ -29,6 +29,7 @@ from .core.managers.notification_manager import NotificationManager
 from .core.mqtt_listener import MQTTNotificationListener
 from .core.heartbeat import HeartbeatReporter
 from .core.component_updates import ComponentUpdateManager
+from .core.system_updates import SystemUpdateManager
 from .core.remote_support import RemoteSupportManager, _load_public_keys
 from .core.managers.config_manager import ConfigManager
 from .core.managers.help_message_manager import HelpMessageManager
@@ -1129,6 +1130,7 @@ def _supervisor_request(
     payload: dict[str, Any] | None = None,
     *,
     raise_on_error: bool = False,
+    timeout: int = 15,
 ) -> dict[str, Any]:
     token = os.getenv("SUPERVISOR_TOKEN", "").strip()
     if not token:
@@ -1140,7 +1142,7 @@ def _supervisor_request(
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    resp = requests.request(method, url, headers=headers, json=payload, timeout=15)
+    resp = requests.request(method, url, headers=headers, json=payload, timeout=timeout)
     if resp.status_code // 100 != 2:
         if raise_on_error:
             try:
@@ -1824,12 +1826,16 @@ _HEARTBEAT_ALLOWED_ACTIONS = {
     "delete_ha_support_user",
     "rebuild_hausie",
     "refresh_plan",
+    "reboot_host",
     "reset_pairing",
     "restart_hausie",
     "sync_label_catalog",
     "sync_help_messages",
     "update_heartbeat_interval",
     "update_components",
+    "update_addon",
+    "update_haos",
+    "update_home_assistant",
     "update_plan",
 }
 
@@ -2059,9 +2065,45 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
             ]
             if not normalized:
                 return
+        system_update_types = {"update_addon", "update_haos", "update_home_assistant"}
+        system_update = next(
+            (
+                action
+                for action in normalized
+                if str(action.get("type") or "").strip().lower() in system_update_types
+            ),
+            None,
+        )
+        if system_update:
+            action_type = str(system_update.get("type") or "").strip().lower()
+            with log.script(action_type):
+                manager = SystemUpdateManager(request=_supervisor_request, log=log)
+                manager.apply(system_update)
+            normalized = [
+                action
+                for action in normalized
+                if str(action.get("type") or "").strip().lower() not in system_update_types
+            ]
+            threading.Timer(1.0, _send_heartbeat_now).start()
+            if not normalized:
+                return
         for action in normalized:
             action_type = str(action.get("type") or "").strip().lower()
             action_payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+            if action_type == "reboot_host":
+                if not payload_data.get("reboot_required"):
+                    log.warn("Host reboot skipped because Cloud did not report a required reboot.")
+                    continue
+                with log.script("reboot_host"):
+                    log.start("Rebooting the Pi to finish the Home Assistant OS update.")
+                    _supervisor_request(
+                        "POST",
+                        "/host/reboot",
+                        {"force": False},
+                        raise_on_error=True,
+                        timeout=30,
+                    )
+                return
             if action_type == "create_ha_support_user":
                 _create_ha_support_user(action_payload)
                 continue

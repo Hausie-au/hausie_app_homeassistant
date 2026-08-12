@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.99
+
+- Improve the Home Assistant add-on logo with a transparent background and a larger, clearer Hausie wordmark.
+- Report HA OS, Home Assistant, Supervisor, add-on, Browser Mod, and Button Card versions in the daily heartbeat.
+- Apply centrally approved version updates one at a time with health checks, backups, duplicate protection, a local daily safety limit, and immediate result reporting.
+- Report pending HA OS reboots and accept a non-forced Cloud reboot command only when the heartbeat response confirms that reboot is required.
+
 ## 0.2.98
 
 - Standardize Hausie-owned Home Assistant IDs across helpers, automations, dashboards, and REST commands.

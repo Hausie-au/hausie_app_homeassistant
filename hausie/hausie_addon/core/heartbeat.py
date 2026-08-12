@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import ipaddress
 import os
 import re
@@ -17,6 +18,7 @@ from .component_updates import get_component_versions
 from .flow_logger import get_logger
 from .license_state import load_license_state
 from .device_state import load_device_state
+from .system_updates import clear_update_result, get_supervisor_inventory, load_update_result
 
 
 def _run_command(command: list[str]) -> str:
@@ -105,6 +107,39 @@ class HeartbeatReporter:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._interval_lock = threading.Lock()
+        self._inventory_cache: dict[str, Any] = {}
+        self._inventory_cached_at = 0.0
+
+    @staticmethod
+    def _supervisor_request(method: str, path: str, payload: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+        token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+        if not token:
+            return {}
+        response = requests.request(
+            method,
+            f"http://supervisor{path}",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=kwargs.get("timeout", 15),
+        )
+        if response.status_code // 100 != 2:
+            return {}
+        try:
+            data = response.json()
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _version_inventory(self) -> dict[str, Any]:
+        now = time.monotonic()
+        if self._inventory_cache and now - self._inventory_cached_at < 23 * 60 * 60:
+            return self._inventory_cache
+        try:
+            self._inventory_cache = get_supervisor_inventory(self._supervisor_request)
+            self._inventory_cached_at = now
+        except Exception as exc:
+            self._log.warn(f"Failed to inspect Supervisor versions: {exc}")
+        return self._inventory_cache
 
     def _read_support_state(self) -> dict[str, Any]:
         if not self._state_path.exists():
@@ -128,7 +163,7 @@ class HeartbeatReporter:
             self._log.warn(f"Failed to inspect local component versions: {exc}")
             components = {}
         device_state = load_device_state()
-        return {
+        payload = {
             "device_id": self._device_id,
             "timestamp": int(time.time()),
             "support_active": bool(support.get("support_active", False)),
@@ -146,6 +181,11 @@ class HeartbeatReporter:
             "offline_valid_until": license_state.get("offline_valid_until"),
             "last_license_sync_at": license_state.get("last_license_sync_at"),
         }
+        payload.update(self._version_inventory())
+        update_result = load_update_result()
+        if update_result:
+            payload["update_result"] = update_result
+        return payload
 
     def _next_interval(self) -> int:
         support = self._read_support_state()
@@ -154,6 +194,14 @@ class HeartbeatReporter:
             interval_s = self._interval_s
         if bool(support.get("support_active", False)):
             return support_interval_s
+        if interval_s >= 86400:
+            slot = int.from_bytes(
+                hashlib.sha256(self._device_id.encode("utf-8")).digest()[:4],
+                "big",
+            ) % 86400
+            seconds_today = int(time.time()) % 86400
+            delay = (slot - seconds_today) % 86400
+            return delay if delay >= 30 else delay + 86400
         return interval_s
 
     def _send_once(self) -> None:
@@ -171,6 +219,8 @@ class HeartbeatReporter:
                 data = resp.json()
             except Exception:
                 data = None
+            if payload.get("update_result"):
+                clear_update_result()
             if isinstance(data, dict) and self._on_actions:
                 actions = data.get("actions")
                 self._on_actions(actions if isinstance(actions, list) else [], data)
