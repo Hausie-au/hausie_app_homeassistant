@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.101
+
+- Discover the Tailscale IPv4 address automatically through the Home Assistant
+  Supervisor network API when the add-on cannot see the host interface.
+- Include the discovery source in the heartbeat so the admin panel can show
+  whether the address came from Tailscale, the network interface, or Supervisor.
+
 ## 0.2.100
 
 - Preserve all existing Hausie configuration helper values while Refresh Hausie reloads generated Home Assistant configuration.

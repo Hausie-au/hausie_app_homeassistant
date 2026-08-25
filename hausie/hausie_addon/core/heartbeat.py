@@ -77,6 +77,59 @@ def _resolve_tailscale_ip() -> tuple[str, str]:
     return "", "missing"
 
 
+def _supervisor_tailscale_ip(
+    supervisor_request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
+) -> tuple[str, str]:
+    """Read a Tailscale address from Supervisor's host network information.
+
+    The Tailscale app is a separate Home Assistant app, so Hausie must not
+    depend on its private container filesystem or an app-specific API. The
+    Supervisor network endpoint is the supported cross-app source. Different
+    Supervisor versions return slightly different network shapes, therefore
+    walk the response and only accept IPv4 addresses in Tailscale's CGNAT
+    range (100.64.0.0/10).
+    """
+
+    try:
+        response = supervisor_request("GET", "/network/info", None)
+    except Exception:
+        return "", "missing"
+
+    def walk(value: Any) -> str:
+        if isinstance(value, dict):
+            # Prefer fields that normally contain interface addresses. This
+            # avoids selecting an unrelated 100.x value in metadata first.
+            preferred_keys = (
+                "ip_address",
+                "ip_addresses",
+                "addresses",
+                "address",
+                "ipv4",
+                "ip",
+                "ips",
+            )
+            for key in preferred_keys:
+                if key in value:
+                    candidate = walk(value[key])
+                    if candidate:
+                        return candidate
+            for child in value.values():
+                candidate = walk(child)
+                if candidate:
+                    return candidate
+            return ""
+        if isinstance(value, (list, tuple, set)):
+            for child in value:
+                candidate = walk(child)
+                if candidate:
+                    return candidate
+            return ""
+        return _first_tailscale_ip(str(value))
+
+    ip = walk(response)
+    return (ip, "supervisor-network") if ip else ("", "missing")
+
+
 class HeartbeatReporter:
     """Send periodic heartbeat payloads to Hausie Cloud."""
 
@@ -153,6 +206,10 @@ class HeartbeatReporter:
         support = self._read_support_state()
         license_state = load_license_state()
         tailscale_ip, tailscale_ip_source = _resolve_tailscale_ip()
+        if not tailscale_ip:
+            tailscale_ip, tailscale_ip_source = _supervisor_tailscale_ip(
+                self._supervisor_request
+            )
         try:
             config = self._ha.get_config()
         except Exception:
