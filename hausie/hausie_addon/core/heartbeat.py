@@ -49,6 +49,21 @@ def _first_tailscale_ip(raw: str) -> str:
     return ""
 
 
+def _proc_tailscale_ip() -> str:
+    """Find a Tailscale IPv4 address without requiring the ``ip`` binary.
+
+    The add-on image is intentionally small and does not install iproute2.
+    When the add-on uses host networking, ``/proc/net/fib_trie`` still exposes
+    the host namespace addresses, including the Tailscale CGNAT address.
+    """
+
+    try:
+        raw = Path("/proc/net/fib_trie").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    return _first_tailscale_ip(raw)
+
+
 def _resolve_tailscale_ip() -> tuple[str, str]:
     configured = os.getenv("HAUSIE_TAILSCALE_IP", "").strip()
     if configured:
@@ -73,6 +88,10 @@ def _resolve_tailscale_ip() -> tuple[str, str]:
         ip = _first_tailscale_ip(output)
         if ip:
             return ip, "network-interface"
+
+    ip = _proc_tailscale_ip()
+    if ip:
+        return ip, "proc-network"
 
     return "", "missing"
 

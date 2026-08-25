@@ -1,3 +1,4 @@
+from hausie_addon.core import heartbeat
 from hausie_addon.core.heartbeat import _supervisor_tailscale_ip
 
 
@@ -35,3 +36,19 @@ def test_supervisor_network_ignores_non_tailscale_addresses():
         }
 
     assert _supervisor_tailscale_ip(request) == ("", "missing")
+
+
+def test_proc_network_finds_tailscale_ip_without_iproute2(monkeypatch):
+    monkeypatch.setattr(
+        heartbeat.Path,
+        "read_text",
+        lambda *args, **kwargs: """
+Main:
+    192.168.150.136
+        /32 host LOCAL
+    100.66.164.86
+        /32 host LOCAL
+""",
+    )
+
+    assert heartbeat._proc_tailscale_ip() == "100.66.164.86"
