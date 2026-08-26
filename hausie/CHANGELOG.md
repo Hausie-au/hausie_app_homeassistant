@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.104
+
+- Remove the manual Tailscale IP option. Heartbeats now always discover the
+  address automatically from the local network or Supervisor.
+- Include `iproute2` in the add-on image so host-networked development installs
+  can inspect the Tailscale interface reliably.
+
 ## 0.2.101
 
 - Discover the Tailscale IPv4 address automatically through the Home Assistant

@@ -52,3 +52,13 @@ Main:
     )
 
     assert heartbeat._proc_tailscale_ip() == "100.66.164.86"
+
+
+def test_resolver_ignores_manual_tailscale_option(monkeypatch):
+    """The address must never come from an add-on option or environment var."""
+
+    monkeypatch.setenv("HAUSIE_TAILSCALE_IP", "100.99.88.77")
+    monkeypatch.setattr(heartbeat, "_run_command", lambda command: "")
+    monkeypatch.setattr(heartbeat, "_proc_tailscale_ip", lambda: "")
+
+    assert heartbeat._resolve_tailscale_ip() == ("", "missing")

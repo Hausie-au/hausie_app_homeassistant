@@ -18,7 +18,6 @@ mapping = {
     "ha_ui_password": "HA_UI_PASSWORD",
     "hausie_cloud_url": "HAUSIE_CLOUD_URL",
     "pairing_code": "HAUSIE_PAIRING_CODE",
-    "tailscale_ip": "HAUSIE_TAILSCALE_IP",
 }
 
 with open("/data/options.json", "r", encoding="utf-8") as f:
@@ -42,6 +41,12 @@ fi
 if [ -z "${HAUSIE_LOCAL_MODE:-}" ]; then
   export HAUSIE_LOCAL_MODE="true"
 fi
+
+# The private dev add-on deliberately exposes the detailed flow log through
+# Supervisor app logs.  Production keeps the same logger file-only behavior.
+case "${HAUSIE_CLOUD_URL:-}" in
+  *dev-api.hausiehome.com*) export HAUSIE_LOG_STDOUT="true" ;;
+esac
 
 export PI_HA_CONFIG_DIR="${PI_HA_CONFIG_DIR:-/homeassistant}"
 export PI_DASHBOARD_DIR="${PI_DASHBOARD_DIR:-/homeassistant/dashboards}"

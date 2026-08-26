@@ -65,10 +65,12 @@ def _proc_tailscale_ip() -> str:
 
 
 def _resolve_tailscale_ip() -> tuple[str, str]:
-    configured = os.getenv("HAUSIE_TAILSCALE_IP", "").strip()
-    if configured:
-        return configured, "manual"
+    """Discover the Tailscale IPv4 address without user-provided settings.
 
+    The add-on never accepts a manually configured Tailscale address. Keeping
+    this value automatic means it follows DHCP/network changes and prevents a
+    stale address from being published to Cloud.
+    """
     try:
         output = _run_command(["tailscale", "ip", "-4"])
     except Exception:

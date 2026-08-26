@@ -8,7 +8,15 @@ from pathlib import Path
 
 _LOG_FILE = Path("/data/hausie_addon.log")
 _LOG_MAX = 1048576
-_LOG_STDOUT = False
+# Keep the detailed flow log in /data by default.  Development add-ons can
+# opt in to stdout so Supervisor's app log shows the support/heartbeat flow
+# while it is being debugged, without changing production log volume.
+_LOG_STDOUT = os.getenv("HAUSIE_LOG_STDOUT", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def _append_log(line: str) -> None:

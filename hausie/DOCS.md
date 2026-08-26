@@ -17,10 +17,8 @@ Optional:
 ```yaml
 ha_ui_username: "hausie_bot"
 ha_ui_password: "A_DEDICATED_HOME_ASSISTANT_UI_PASSWORD"
-tailscale_ip: "100.x.x.x"
 ```
 
-Use `tailscale_ip` when the add-on cannot automatically detect the Tailscale IP.
 Use `ha_ui_username` and `ha_ui_password` if you want Hausie to recreate or update
 the main Hausie dashboard through the Home Assistant UI with Playwright.
 
@@ -34,6 +32,9 @@ When enabled from the Home Assistant dashboard:
 - Hausie adds those keys to the SSH add-on configuration.
 - Hausie starts the SSH add-on.
 - Hausie reports support status, heartbeat, Home Assistant version, add-on version, and Tailscale IP to Hausie Cloud.
+
+The Tailscale IP is discovered automatically from the local network interface
+or the Home Assistant Supervisor network API. It is never entered manually.
 
 When disabled:
 

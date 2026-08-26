@@ -25,8 +25,10 @@ ha_ui_username: ""
 ha_ui_password: ""
 hausie_cloud_url: ""
 pairing_code: ""
-tailscale_ip: ""
 ```
+
+The Tailscale address used for remote support is discovered automatically on
+each heartbeat; it is not entered in the add-on configuration.
 
 Optional logging and support settings are also exposed in the add-on schema.
 

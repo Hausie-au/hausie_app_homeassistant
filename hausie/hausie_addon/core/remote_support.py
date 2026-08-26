@@ -361,6 +361,20 @@ class RemoteSupportManager:
             self._log.warn(f"Failed to fetch cloud support session; using fallback: {exc}")
             return None
 
+    def _refresh_cloud_lease(self, session: dict[str, Any]) -> None:
+        """Refresh the local watchdog from the active cloud lease."""
+
+        try:
+            expires_at = int(session.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        if not expires_at:
+            return
+        remaining = max(60, expires_at - int(time.time()))
+        self._state.started_at = time.time()
+        self._state.timeout_s = remaining
+        self._save_state()
+
     def _set_ssh_addon(self, enabled: bool) -> None:
         if not self._manage_ssh:
             return
@@ -471,6 +485,8 @@ class RemoteSupportManager:
                 self._set_toggle(False)
                 self._last_toggle = False
                 return
+            if session is not None and bool(session.get("active", False)):
+                self._refresh_cloud_lease(session)
 
         if self._state.active and self._state.expired():
             self._log.warn("Remote support timed out; disabling.")
