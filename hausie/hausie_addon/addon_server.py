@@ -4627,15 +4627,30 @@ def _render_setup_html(ingress_path: str = "") -> str:
     credential_fields = ""
     if not status["credentials"]["credentials_valid"]:
         credential_fields = """          <label>Home Assistant token
-            <input id="haToken" type="password" autocomplete="off" placeholder="Paste a long-lived access token"/>
+            <span class="secret-field">
+              <input id="haToken" type="password" autocomplete="off" placeholder="Paste a long-lived access token"/>
+              <button class="visibility-toggle" type="button" data-visibility-toggle data-target="haToken" aria-label="Show Home Assistant token" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Zm9.5 2.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"/></svg>
+              </button>
+            </span>
             <small>Leave blank only if it is already configured.</small>
           </label>
           <label>Hausie support password
-            <input id="supportPassword" type="password" autocomplete="new-password" placeholder="Password for __SUPPORT_USERNAME__"/>
+            <span class="secret-field">
+              <input id="supportPassword" type="password" autocomplete="new-password" placeholder="Password for __SUPPORT_USERNAME__"/>
+              <button class="visibility-toggle" type="button" data-visibility-toggle data-target="supportPassword" aria-label="Show Hausie support password" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Zm9.5 2.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"/></svg>
+              </button>
+            </span>
             <small>Used by the local Hausie support user. Leave blank only if already configured.</small>
           </label>
           <label>Hausie administrator password
-            <input id="adminPassword" type="password" autocomplete="new-password" placeholder="Password for __ADMIN_USERNAME__"/>
+            <span class="secret-field">
+              <input id="adminPassword" type="password" autocomplete="new-password" placeholder="Password for __ADMIN_USERNAME__"/>
+              <button class="visibility-toggle" type="button" data-visibility-toggle data-target="adminPassword" aria-label="Show Hausie administrator password" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Zm9.5 2.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"/></svg>
+              </button>
+            </span>
             <small>Used only to create or update the local administrator. Hausie does not retain this password.</small>
           </label>
 """
@@ -4668,8 +4683,13 @@ def _render_setup_html(ingress_path: str = "") -> str:
       form { display:grid; gap:15px; margin-top:16px; }
       label { display:grid; gap:7px; font-size:14px; font-weight:700; }
       small { color:var(--muted); font-weight:400; line-height:1.35; }
-      input { min-height:52px; width:100%; border:1px solid var(--border); border-radius:12px; padding:12px 14px; background:var(--surface); color:var(--text); font-size:16px; }
+      .secret-field { position:relative; display:block; }
+      input { min-height:52px; width:100%; border:1px solid var(--border); border-radius:12px; padding:12px 52px 12px 14px; background:var(--surface); color:var(--text); font-size:16px; }
       input:focus { outline:2px solid rgba(0,67,76,.18); border-color:var(--primary); }
+      .visibility-toggle { position:absolute; top:50%; right:8px; display:grid; width:36px; min-height:36px; padding:7px; transform:translateY(-50%); align-items:center; justify-content:center; border:0; border-radius:9px; background:transparent; color:var(--primary); box-shadow:none; }
+      .visibility-toggle:hover { background:var(--tint); }
+      .visibility-toggle:focus-visible { outline:2px solid rgba(0,67,76,.35); outline-offset:1px; }
+      .visibility-toggle svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
       button,a.button { display:inline-flex; width:100%; min-height:52px; align-items:center; justify-content:center; border:0; border-radius:12px; padding:13px 16px; background:var(--primary); color:#fff; font-size:16px; font-weight:800; text-decoration:none; cursor:pointer; box-shadow:0 1px 2px rgba(0,67,76,.3); }
       button:hover,a.button:hover { background:var(--primary-dark); }
       button:disabled { opacity:.58; cursor:not-allowed; }
@@ -4699,13 +4719,17 @@ def _render_setup_html(ingress_path: str = "") -> str:
         <form id="setupForm">
 __CREDENTIAL_FIELDS__
           <label>Hausie pairing code
-            <input id="pairingCode" type="password" autocomplete="off" placeholder="Code for this customer's Hausie home"/>
+            <span class="secret-field">
+              <input id="pairingCode" type="password" autocomplete="off" placeholder="Code for this customer's Hausie home"/>
+              <button class="visibility-toggle" type="button" data-visibility-toggle data-target="pairingCode" aria-label="Show Hausie pairing code" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Zm9.5 2.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"/></svg>
+              </button>
+            </span>
             <small>Required only when this Pi has not been paired yet. It is not stored after registration.</small>
           </label>
           <button id="initializeButton" type="submit">Initialize Hausie</button>
         </form>
         <div id="message" class="message"></div>
-        <a id="openConfig" class="button secondary" href="/config-dashboard/main" hidden>Open Configuration</a>
       </section>
     </main>
     <script>
@@ -4713,7 +4737,6 @@ __CREDENTIAL_FIELDS__
       const CSRF_TOKEN = __CSRF_TOKEN__;
       const message = document.getElementById("message");
       const initializeButton = document.getElementById("initializeButton");
-      const openConfig = document.getElementById("openConfig");
       let currentStatus = null;
 
       async function request(path, options = {}) {
@@ -4747,7 +4770,6 @@ __CREDENTIAL_FIELDS__
         initializeButton.disabled = Boolean(status.initializing || fullyReady);
         initializeButton.classList.toggle("loading", Boolean(status.initializing));
         initializeButton.textContent = status.initializing ? "Initializing Hausie..." : fullyReady ? "Hausie initialized" : repairingCredentials ? "Save and verify credentials" : "Initialize Hausie";
-        openConfig.hidden = !fullyReady;
         if (status.phase === "failed") showMessage("error", status.message);
       }
 
@@ -4786,6 +4808,17 @@ __CREDENTIAL_FIELDS__
           showMessage("error", error.message);
           initializeButton.disabled = false;
         }
+      });
+
+      document.querySelectorAll("[data-visibility-toggle]").forEach((toggle) => {
+        toggle.addEventListener("click", () => {
+          const input = document.getElementById(toggle.dataset.target);
+          if (!input) return;
+          const visible = input.type === "text";
+          input.type = visible ? "password" : "text";
+          toggle.setAttribute("aria-pressed", String(!visible));
+          toggle.setAttribute("aria-label", `${visible ? "Show" : "Hide"} ${toggle.getAttribute("aria-label")?.replace(/^(Show|Hide) /, "") || "value"}`);
+        });
       });
 
       async function scheduleStatusRefresh() {
@@ -4933,15 +4966,39 @@ def _render_credentials_html(ingress_path: str = "") -> str:
       .field small {{
         color: var(--muted);
       }}
+      .secret-field {{
+        position: relative;
+        display: block;
+      }}
       input {{
         width: 100%;
         border-radius: 12px;
         border: 1px solid var(--border);
         background: var(--surface);
         color: var(--text);
-        padding: 14px 16px;
+        padding: 14px 52px 14px 16px;
         font-size: 16px;
       }}
+      .visibility-toggle {{
+        position: absolute;
+        top: 50%;
+        right: 8px;
+        display: grid;
+        width: 36px;
+        min-height: 36px;
+        padding: 7px;
+        transform: translateY(-50%);
+        align-items: center;
+        justify-content: center;
+        border: 0;
+        border-radius: 9px;
+        background: transparent;
+        color: var(--primary);
+        box-shadow: none;
+      }}
+      .visibility-toggle:hover {{ background: var(--tint); }}
+      .visibility-toggle:focus-visible {{ outline: 2px solid rgba(0,67,76,.35); outline-offset: 1px; }}
+      .visibility-toggle svg {{ width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }}
       .button-row {{
         display: flex;
         gap: 12px;
@@ -5015,17 +5072,32 @@ def _render_credentials_html(ingress_path: str = "") -> str:
         <form id="credentialsForm">
           <div class="field">
             <label for="haToken">Home Assistant token</label>
-            <input id="haToken" name="haToken" type="password" autocomplete="off" placeholder="Paste a long-lived access token"/>
+            <span class="secret-field">
+              <input id="haToken" name="haToken" type="password" autocomplete="off" placeholder="Paste a long-lived access token"/>
+              <button class="visibility-toggle" type="button" data-visibility-toggle data-target="haToken" aria-label="Show Home Assistant token" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Zm9.5 2.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"/></svg>
+              </button>
+            </span>
             <small>Leave blank to keep the current token if one is already saved.</small>
           </div>
           <div class="field">
             <label for="supportPassword">Support user password</label>
-            <input id="supportPassword" name="supportPassword" type="password" autocomplete="new-password" placeholder="Password for {support_username}"/>
+            <span class="secret-field">
+              <input id="supportPassword" name="supportPassword" type="password" autocomplete="new-password" placeholder="Password for {support_username}"/>
+              <button class="visibility-toggle" type="button" data-visibility-toggle data-target="supportPassword" aria-label="Show Hausie support password" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Zm9.5 2.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"/></svg>
+              </button>
+            </span>
             <small>Leave blank to keep the current password if one is already saved.</small>
           </div>
           <div class="field">
             <label for="adminPassword">Administrator password</label>
-            <input id="adminPassword" name="adminPassword" type="password" autocomplete="new-password" placeholder="Password for {admin_username}"/>
+            <span class="secret-field">
+              <input id="adminPassword" name="adminPassword" type="password" autocomplete="new-password" placeholder="Password for {admin_username}"/>
+              <button class="visibility-toggle" type="button" data-visibility-toggle data-target="adminPassword" aria-label="Show Hausie administrator password" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Zm9.5 2.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Z"/></svg>
+              </button>
+            </span>
             <small>Required on first setup. Leave blank later to keep the current administrator password.</small>
           </div>
           <div class="button-row">
@@ -5104,6 +5176,17 @@ def _render_credentials_html(ingress_path: str = "") -> str:
         }} finally {{
           saveBtn.disabled = false;
         }}
+      }});
+
+      document.querySelectorAll("[data-visibility-toggle]").forEach((toggle) => {{
+        toggle.addEventListener("click", () => {{
+          const input = document.getElementById(toggle.dataset.target);
+          if (!input) return;
+          const visible = input.type === "text";
+          input.type = visible ? "password" : "text";
+          toggle.setAttribute("aria-pressed", String(!visible));
+          toggle.setAttribute("aria-label", `${{visible ? "Show" : "Hide"}} ${{toggle.getAttribute("aria-label")?.replace(/^(Show|Hide) /, "") || "value"}}`);
+        }});
       }});
 
       renderStatus(initialStatus);
