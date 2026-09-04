@@ -64,7 +64,7 @@ class CredentialPasswordResetTests(unittest.TestCase):
             patch.object(addon_server, "load_device_state", return_value={}),
             patch.object(addon_server, "_resolve_ha_admin_client", return_value=ha),
         ):
-            with self.assertRaisesRegex(PermissionError, "Guest.*not an administrator"):
+            with self.assertRaisesRegex(RuntimeError, "Guest.*not an administrator"):
                 addon_server._save_ha_credentials(
                     {
                         "ha_token": "administrator-token",
