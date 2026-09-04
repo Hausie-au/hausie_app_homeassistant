@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.106
+
+- Add show/hide controls to the setup and credentials fields.
+- Remove the Open Configuration shortcut from the initial setup screen.
+
 ## 0.2.104
 
 - Remove the manual Tailscale IP option. Heartbeats now always discover the
