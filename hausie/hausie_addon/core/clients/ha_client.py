@@ -29,6 +29,13 @@ class HAClient:
             response = ws.recv()
             response_msg = json.loads(response)
             if response_msg.get("id") == request_id:
+                if not response_msg.get("success", False):
+                    error = response_msg.get("error") or {}
+                    if isinstance(error, dict):
+                        detail = str(error.get("message") or error.get("code") or error)
+                    else:
+                        detail = str(error or "Home Assistant rejected the request")
+                    raise RuntimeError(f"Home Assistant rejected '{message_type}': {detail}")
                 return response_msg.get("result")
 
     def _save_raw(self, data: dict) -> None:

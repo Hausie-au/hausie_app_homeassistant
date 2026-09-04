@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.107
+
+- Use the Home Assistant add-on Supervisor proxy for setup and runtime Core API
+  access, so local Hausie user provisioning no longer depends on a customer
+  token having administrator privileges.
+- Report rejected Home Assistant WebSocket commands directly instead of treating
+  them as empty results.
+
 ## 0.2.106
 
 - Add show/hide controls to the setup and credentials fields.

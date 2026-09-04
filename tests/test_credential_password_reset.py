@@ -1,5 +1,6 @@
 import sys
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -9,9 +10,47 @@ sys.path.insert(0, str(ADDON_ROOT))
 
 from hausie_addon import addon_server  # noqa: E402
 from hausie_addon.core.clients.ha_client import HAClient  # noqa: E402
+from hausie_addon.settings import Settings  # noqa: E402
 
 
 class CredentialPasswordResetTests(unittest.TestCase):
+    def test_rejected_websocket_command_is_reported(self) -> None:
+        class RejectedSocket:
+            def send(self, _payload: str) -> None:
+                return None
+
+            def recv(self) -> str:
+                return json.dumps(
+                    {
+                        "id": 1,
+                        "type": "result",
+                        "success": False,
+                        "error": {"code": "unauthorized", "message": "Unauthorized"},
+                    }
+                )
+
+        ha = HAClient.__new__(HAClient)
+
+        with self.assertRaisesRegex(RuntimeError, "config/auth/list.*Unauthorized"):
+            ha._send_and_wait(RejectedSocket(), 1, "config/auth/list")
+
+    def test_home_assistant_os_uses_supervisor_proxy_for_privileged_client(self) -> None:
+        with patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token"}, clear=True):
+            ha = addon_server._resolve_ha_admin_client()
+
+        self.assertIsNotNone(ha)
+        self.assertEqual(ha.token, "supervisor-token")
+        self.assertEqual(ha.ha_url_ws, "ws://supervisor/core/websocket")
+        self.assertEqual(ha.ha_url_rest, "http://supervisor/core/api")
+
+    def test_settings_use_supervisor_proxy_when_running_as_an_addon(self) -> None:
+        with patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token"}, clear=True):
+            settings = Settings()
+
+        self.assertEqual(settings.HA_TOKEN, "supervisor-token")
+        self.assertEqual(settings.HA_WS_URL, "ws://supervisor/core/websocket")
+        self.assertEqual(settings.HA_REST_URL, "http://supervisor/core/api")
+
     def test_installer_can_persist_credentials_without_resetting_users_again(self) -> None:
         ha = Mock()
         ha.fetch_users.return_value = [

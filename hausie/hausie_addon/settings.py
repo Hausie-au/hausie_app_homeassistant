@@ -20,11 +20,22 @@ class Settings:
         """Load Home Assistant settings from the environment."""
         default_ws = "ws://homeassistant:8123/api/websocket"
         default_rest = "http://homeassistant:8123/api"
-        self.HA_WS_URL = os.getenv("HA_WS_URL", default_ws)
-        self.HA_REST_URL = os.getenv("HA_REST_URL", default_rest)
-        self.HA_TOKEN, self.HA_UI_USERNAME, self.HA_UI_PASSWORD = resolve_ha_runtime_credentials()
+        supervisor_token = os.getenv("SUPERVISOR_TOKEN", "").strip()
+        saved_token, self.HA_UI_USERNAME, self.HA_UI_PASSWORD = resolve_ha_runtime_credentials()
+        if supervisor_token:
+            # Home Assistant add-ons receive a Supervisor credential expressly for
+            # Core API access. It is the only credential that can reliably perform
+            # setup and ongoing configuration work without depending on a customer
+            # user's long-lived token or role.
+            self.HA_WS_URL = os.getenv("HAUSIE_SUPERVISOR_WS_URL", "ws://supervisor/core/websocket")
+            self.HA_REST_URL = os.getenv("HAUSIE_SUPERVISOR_REST_URL", "http://supervisor/core/api")
+            self.HA_TOKEN = supervisor_token
+        else:
+            self.HA_WS_URL = os.getenv("HA_WS_URL", default_ws)
+            self.HA_REST_URL = os.getenv("HA_REST_URL", default_rest)
+            self.HA_TOKEN = saved_token
         if not self.HA_TOKEN:
-            raise RuntimeError("Falta HA_TOKEN (o HA_TOKEN_FILE).")
+            raise RuntimeError("Home Assistant access is unavailable. Start this as a Home Assistant add-on or configure HA_TOKEN.")
         self.PLAYWRIGHT_STORAGE_STATE = os.getenv("PLAYWRIGHT_STORAGE_STATE")
         self.HAUSIE_CLOUD_URL = os.getenv("HAUSIE_CLOUD_URL", "").strip() or DEFAULT_HAUSIE_CLOUD_URL
         self.HAUSIE_CLOUD_TOKEN = os.getenv("HAUSIE_CLOUD_TOKEN") or _read_secret_file(
