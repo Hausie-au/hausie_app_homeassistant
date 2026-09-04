@@ -1,10 +1,17 @@
 # Changelog
 
+## 0.2.108
+
+- Use the installer-provided Home Assistant administrator token only for the
+  privileged local-user provisioning commands. The add-on continues to use the
+  Supervisor proxy for normal runtime Core API access.
+- Verify the token's Home Assistant role before provisioning and report a clear
+  administrator-token error instead of a generic unauthorized WebSocket error.
+
 ## 0.2.107
 
-- Use the Home Assistant add-on Supervisor proxy for setup and runtime Core API
-  access, so local Hausie user provisioning no longer depends on a customer
-  token having administrator privileges.
+- Use the Home Assistant add-on Supervisor proxy for normal runtime Core API
+  access.
 - Report rejected Home Assistant WebSocket commands directly instead of treating
   them as empty results.
 

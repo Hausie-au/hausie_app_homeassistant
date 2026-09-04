@@ -1278,22 +1278,20 @@ def _patch_add_device_shortcut(log) -> None:
 
 def _ha_credentials_status_payload() -> dict[str, Any]:
     token, username, password = resolve_ha_runtime_credentials()
-    supervisor_access = bool(str(os.getenv("SUPERVISOR_TOKEN") or "").strip())
     state = load_device_state()
     admin_password_configured = bool(state.get("hausie_admin_password_configured"))
     validation = state.get("ha_credentials_validation") if isinstance(state.get("ha_credentials_validation"), dict) else {}
     credentials_valid = bool(validation.get("valid"))
     validation_error = str(validation.get("error") or "").strip()
     missing_fields: list[str] = []
-    if not token and not supervisor_access:
+    if not token:
         missing_fields.append("ha_token")
     if not password:
         missing_fields.append("support_password")
     if not admin_password_configured:
         missing_fields.append("admin_password")
     return {
-        "has_token": bool(token) or supervisor_access,
-        "uses_supervisor_access": supervisor_access,
+        "has_token": bool(token),
         "has_support_password": bool(password),
         "has_admin_password": admin_password_configured,
         "credentials_valid": credentials_valid,
@@ -1338,7 +1336,7 @@ def _setup_status_payload() -> dict[str, Any]:
         message = str(setup_state.get("message") or "Hausie initialization failed. Review the add-on logs and try again.")
     elif credentials["setup_required"]:
         phase = "credentials"
-        message = credentials["validation_error"] or "Enter the Hausie account passwords."
+        message = credentials["validation_error"] or "Enter the Home Assistant token and the Hausie account passwords."
     elif not paired:
         phase = "pairing"
         message = "Enter the pairing code for this Hausie home."
@@ -1495,8 +1493,8 @@ def _save_ha_credentials(payload: dict[str, Any]) -> dict[str, Any]:
 
     token_to_use = requested_token or current_token
     support_password_to_use = requested_support_password or current_password
-    if not token_to_use and not str(os.getenv("SUPERVISOR_TOKEN") or "").strip():
-        raise ValueError("Home Assistant access is required. Start the Hausie add-on from Home Assistant or provide a token.")
+    if not token_to_use:
+        raise ValueError("Home Assistant administrator token is required.")
     if not support_password_to_use:
         raise ValueError("Support user password is required.")
     if not requested_admin_password and not admin_password_configured:
@@ -1507,11 +1505,18 @@ def _save_ha_credentials(payload: dict[str, Any]) -> dict[str, Any]:
     os.environ["HA_UI_USERNAME"] = HAUSIE_SUPPORT_USERNAME
     os.environ["HA_UI_PASSWORD"] = support_password_to_use
 
-    ha = _resolve_ha_admin_client()
+    ha = _resolve_ha_admin_client(token_to_use)
     if not ha:
-        raise RuntimeError("Home Assistant administrative access is unavailable. Restart the add-on and retry.")
+        raise RuntimeError("Home Assistant administrative access is unavailable. Check the administrator token and retry.")
 
     try:
+        current_user = ha.fetch_current_user()
+        if not bool(current_user.get("is_admin")):
+            name = str(current_user.get("name") or "this user").strip()
+            raise PermissionError(
+                f"The Home Assistant token belongs to '{name}', which is not an administrator. "
+                "Create the token while signed in to an Administrator account."
+            )
         users = ha.fetch_users()
         users_by_username = {
             str(user.get("username") or user.get("name") or "").strip().lower(): user
@@ -1671,9 +1676,21 @@ def _resolve_ha_client() -> HAClient | None:
     return HAClient(ha_url_ws=ha_ws_url, ha_url_rest=ha_rest_url, token=token)
 
 
-def _resolve_ha_admin_client() -> HAClient | None:
-    """Return the privileged Core client required for managing local HA users."""
-    return _resolve_ha_client()
+def _resolve_ha_admin_client(token: str | None = None) -> HAClient | None:
+    """Return a direct client for the administrator token used to manage HA users.
+
+    The Supervisor Core proxy gives the add-on normal Core API access, but it does
+    not impersonate an administrator for ``config/auth/*`` commands. User
+    provisioning therefore deliberately uses the installer's administrator token.
+    """
+    administrator_token = str(token or resolve_ha_runtime_credentials()[0] or "").strip()
+    if not administrator_token:
+        return None
+    return HAClient(
+        ha_url_ws=os.getenv("HA_WS_URL", "ws://homeassistant:8123/api/websocket"),
+        ha_url_rest=os.getenv("HA_REST_URL", "http://homeassistant:8123/api"),
+        token=administrator_token,
+    )
 
 
 def _validate_ha_credentials(log=None) -> dict[str, Any]:
@@ -1682,9 +1699,8 @@ def _validate_ha_credentials(log=None) -> dict[str, Any]:
     token, _username, support_password = resolve_ha_runtime_credentials()
     valid = False
     error = ""
-    supervisor_access = bool(str(os.getenv("SUPERVISOR_TOKEN") or "").strip())
-    if (not token and not supervisor_access) or not support_password or not state.get("hausie_admin_password_configured"):
-        error = "Home Assistant access and both Hausie account passwords are required."
+    if not token or not support_password or not state.get("hausie_admin_password_configured"):
+        error = "Home Assistant administrator token and both Hausie account passwords are required."
     else:
         ha = _resolve_ha_admin_client()
         try:

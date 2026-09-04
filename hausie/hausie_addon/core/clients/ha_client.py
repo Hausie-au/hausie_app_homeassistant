@@ -287,6 +287,13 @@ class HAClient:
             ws.close()
         return self._normalize_users(users)
 
+    def fetch_current_user(self) -> dict:
+        """Return the Home Assistant user represented by this access token."""
+        current_user = self._auth_ws_call("auth/current_user")
+        if not isinstance(current_user, dict):
+            raise RuntimeError("Home Assistant did not return the current user for this token.")
+        return current_user
+
     def _auth_ws_call(self, message_type: str, payload: dict | None = None):
         """Call a Home Assistant auth websocket command."""
         ws = websocket.create_connection(self.ha_url_ws)

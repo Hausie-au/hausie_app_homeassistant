@@ -34,14 +34,14 @@ class CredentialPasswordResetTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "config/auth/list.*Unauthorized"):
             ha._send_and_wait(RejectedSocket(), 1, "config/auth/list")
 
-    def test_home_assistant_os_uses_supervisor_proxy_for_privileged_client(self) -> None:
-        with patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token"}, clear=True):
-            ha = addon_server._resolve_ha_admin_client()
+    def test_admin_client_uses_installer_token_directly_for_user_provisioning(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            ha = addon_server._resolve_ha_admin_client("administrator-token")
 
         self.assertIsNotNone(ha)
-        self.assertEqual(ha.token, "supervisor-token")
-        self.assertEqual(ha.ha_url_ws, "ws://supervisor/core/websocket")
-        self.assertEqual(ha.ha_url_rest, "http://supervisor/core/api")
+        self.assertEqual(ha.token, "administrator-token")
+        self.assertEqual(ha.ha_url_ws, "ws://homeassistant:8123/api/websocket")
+        self.assertEqual(ha.ha_url_rest, "http://homeassistant:8123/api")
 
     def test_settings_use_supervisor_proxy_when_running_as_an_addon(self) -> None:
         with patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token"}, clear=True):
@@ -51,8 +51,31 @@ class CredentialPasswordResetTests(unittest.TestCase):
         self.assertEqual(settings.HA_WS_URL, "ws://supervisor/core/websocket")
         self.assertEqual(settings.HA_REST_URL, "http://supervisor/core/api")
 
+    def test_setup_explains_when_installer_token_is_not_an_administrator(self) -> None:
+        ha = Mock()
+        ha.fetch_current_user.return_value = {"name": "Guest", "is_admin": False}
+
+        with (
+            patch.object(
+                addon_server,
+                "resolve_ha_runtime_credentials",
+                return_value=("administrator-token", "hausie_support_user", "support-password"),
+            ),
+            patch.object(addon_server, "load_device_state", return_value={}),
+            patch.object(addon_server, "_resolve_ha_admin_client", return_value=ha),
+        ):
+            with self.assertRaisesRegex(PermissionError, "Guest.*not an administrator"):
+                addon_server._save_ha_credentials(
+                    {
+                        "ha_token": "administrator-token",
+                        "admin_password": "administrator-password",
+                        "support_password": "support-password",
+                    }
+                )
+
     def test_installer_can_persist_credentials_without_resetting_users_again(self) -> None:
         ha = Mock()
+        ha.fetch_current_user.return_value = {"name": "Installer", "is_admin": True}
         ha.fetch_users.return_value = [
             {"id": "admin-user-id", "username": "hausie_admin", "isOwner": True, "isAdmin": True},
             {"id": "support-user-id", "username": "hausie_support_user", "isOwner": False, "isAdmin": True},
@@ -68,7 +91,7 @@ class CredentialPasswordResetTests(unittest.TestCase):
             ),
             patch.object(addon_server, "load_device_state", return_value=state),
             patch.object(addon_server, "save_device_state") as save_state,
-            patch.object(addon_server, "_resolve_ha_client", return_value=ha),
+            patch.object(addon_server, "_resolve_ha_admin_client", return_value=ha),
             patch.object(addon_server, "_supervisor_request") as supervisor_request,
             patch.object(addon_server, "persist_ha_runtime_credentials") as persist_credentials,
             patch.object(addon_server, "_validate_ha_credentials", return_value=validation),
@@ -113,6 +136,7 @@ class CredentialPasswordResetTests(unittest.TestCase):
 
     def test_existing_hausie_users_are_updated_without_deletion(self) -> None:
         ha = Mock()
+        ha.fetch_current_user.return_value = {"name": "Installer", "is_admin": True}
         ha.fetch_users.return_value = [
             {"id": "admin-user-id", "username": "hausie_admin", "isOwner": True, "isAdmin": True},
             {"id": "support-user-id", "username": "hausie_support_user", "isOwner": False, "isAdmin": True},
@@ -127,7 +151,7 @@ class CredentialPasswordResetTests(unittest.TestCase):
             ),
             patch.object(addon_server, "load_device_state", return_value={}),
             patch.object(addon_server, "save_device_state"),
-            patch.object(addon_server, "_resolve_ha_client", return_value=ha),
+            patch.object(addon_server, "_resolve_ha_admin_client", return_value=ha),
             patch.object(addon_server, "_supervisor_request") as supervisor_request,
             patch.object(addon_server, "persist_ha_runtime_credentials"),
             patch.object(addon_server, "_validate_ha_credentials", return_value=validation),
