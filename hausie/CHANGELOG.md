@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.109
+
+- Use Home Assistant OS's explicitly granted Auth API to reset existing managed
+  Hausie-user passwords. This avoids the owner-only WebSocket password-reset
+  restriction while retaining administrator-token checks for user creation.
+- Include the rejected Home Assistant command in setup errors for actionable
+  troubleshooting if a Home Assistant version applies a stricter policy.
+
 ## 0.2.108
 
 - Use the installer-provided Home Assistant administrator token only for the

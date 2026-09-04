@@ -34,6 +34,36 @@ class CredentialPasswordResetTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "config/auth/list.*Unauthorized"):
             ha._send_and_wait(RejectedSocket(), 1, "config/auth/list")
 
+    def test_rejected_auth_websocket_command_identifies_the_command(self) -> None:
+        class RejectedSocket:
+            def __init__(self) -> None:
+                self._responses = iter(
+                    [
+                        {"type": "auth_required"},
+                        {"type": "auth_ok"},
+                        {
+                            "id": 1,
+                            "type": "result",
+                            "success": False,
+                            "error": {"code": "unauthorized", "message": "Unauthorized"},
+                        },
+                    ]
+                )
+
+            def send(self, _payload: str) -> None:
+                return None
+
+            def recv(self) -> str:
+                return json.dumps(next(self._responses))
+
+            def close(self) -> None:
+                return None
+
+        ha = HAClient("ws://example", "http://example", "token")
+        with patch("hausie_addon.core.clients.ha_client.websocket.create_connection", return_value=RejectedSocket()):
+            with self.assertRaisesRegex(RuntimeError, "config/auth/create.*Unauthorized"):
+                ha._auth_ws_call("config/auth/create")
+
     def test_admin_client_uses_installer_token_directly_for_user_provisioning(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             ha = addon_server._resolve_ha_admin_client("administrator-token")
@@ -75,7 +105,7 @@ class CredentialPasswordResetTests(unittest.TestCase):
 
     def test_installer_can_persist_credentials_without_resetting_users_again(self) -> None:
         ha = Mock()
-        ha.fetch_current_user.return_value = {"name": "Installer", "is_admin": True}
+        ha.fetch_current_user.return_value = {"name": "Installer", "is_admin": True, "is_owner": True}
         ha.fetch_users.return_value = [
             {"id": "admin-user-id", "username": "hausie_admin", "isOwner": True, "isAdmin": True},
             {"id": "support-user-id", "username": "hausie_support_user", "isOwner": False, "isAdmin": True},
@@ -136,7 +166,7 @@ class CredentialPasswordResetTests(unittest.TestCase):
 
     def test_existing_hausie_users_are_updated_without_deletion(self) -> None:
         ha = Mock()
-        ha.fetch_current_user.return_value = {"name": "Installer", "is_admin": True}
+        ha.fetch_current_user.return_value = {"name": "Installer", "is_admin": True, "is_owner": True}
         ha.fetch_users.return_value = [
             {"id": "admin-user-id", "username": "hausie_admin", "isOwner": True, "isAdmin": True},
             {"id": "support-user-id", "username": "hausie_support_user", "isOwner": False, "isAdmin": True},
@@ -182,6 +212,28 @@ class CredentialPasswordResetTests(unittest.TestCase):
         ha.create_auth_user.assert_not_called()
         for supervisor_call in supervisor_request.call_args_list:
             self.assertNotEqual(supervisor_call.args[:2], ("POST", "/auth/reset"))
+
+    def test_home_assistant_os_resets_existing_managed_password_via_auth_api(self) -> None:
+        ha = Mock()
+        with (
+            patch.dict("os.environ", {"SUPERVISOR_TOKEN": "supervisor-token"}, clear=True),
+            patch.object(addon_server, "_supervisor_request") as supervisor_request,
+        ):
+            addon_server._set_local_hausie_password(
+                ha,
+                current_user={"name": "Installer", "is_admin": True, "is_owner": False},
+                username="hausie_admin",
+                user_id="admin-user-id",
+                password="new-password",
+            )
+
+        supervisor_request.assert_called_once_with(
+            "POST",
+            "/auth/reset",
+            {"username": "hausie_admin", "password": "new-password"},
+            raise_on_error=True,
+        )
+        ha.change_auth_user_password.assert_not_called()
 
 
 if __name__ == "__main__":

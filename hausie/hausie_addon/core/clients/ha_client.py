@@ -316,7 +316,12 @@ class HAClient:
                 if response.get("id") != 1:
                     continue
                 if not response.get("success", False):
-                    raise RuntimeError(f"HA auth command failed: {response}")
+                    error = response.get("error") or {}
+                    if isinstance(error, dict):
+                        detail = str(error.get("message") or error.get("code") or error)
+                    else:
+                        detail = str(error or "Home Assistant rejected the request")
+                    raise RuntimeError(f"Home Assistant rejected '{message_type}': {detail}")
                 return response.get("result")
         finally:
             ws.close()

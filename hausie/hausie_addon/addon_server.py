@@ -1541,7 +1541,13 @@ def _save_ha_credentials(payload: dict[str, Any]) -> dict[str, Any]:
         elif requested_admin_password:
             admin_user = users_by_username.get(HAUSIE_ADMIN_USERNAME)
             if admin_user:
-                ha.change_auth_user_password(admin_user.get("id"), requested_admin_password)
+                _set_local_hausie_password(
+                    ha,
+                    current_user=current_user,
+                    username=HAUSIE_ADMIN_USERNAME,
+                    user_id=admin_user.get("id"),
+                    password=requested_admin_password,
+                )
                 log.ok(f"Administrator password updated: {HAUSIE_ADMIN_USERNAME}")
             else:
                 ha.create_auth_user(
@@ -1562,7 +1568,13 @@ def _save_ha_credentials(payload: dict[str, Any]) -> dict[str, Any]:
                     raise RuntimeError(
                         f"Existing support account '{HAUSIE_SUPPORT_USERNAME}' is not an administrator."
                     )
-                ha.change_auth_user_password(support_user.get("id"), support_password_to_use)
+                _set_local_hausie_password(
+                    ha,
+                    current_user=current_user,
+                    username=HAUSIE_SUPPORT_USERNAME,
+                    user_id=support_user.get("id"),
+                    password=support_password_to_use,
+                )
                 log.ok(f"Support user password updated: {HAUSIE_SUPPORT_USERNAME}")
             else:
                 ha.create_auth_user(
@@ -1691,6 +1703,38 @@ def _resolve_ha_admin_client(token: str | None = None) -> HAClient | None:
         ha_url_rest=os.getenv("HA_REST_URL", "http://homeassistant:8123/api"),
         token=administrator_token,
     )
+
+
+def _set_local_hausie_password(
+    ha: HAClient,
+    *,
+    current_user: dict[str, Any],
+    username: str,
+    user_id: str | None,
+    password: str,
+) -> None:
+    """Set a managed local user's password without requiring the installer to be owner.
+
+    Home Assistant permits an administrator to create local users, but changing
+    another user's password through the WebSocket API is owner-only. On HAOS the
+    add-on uses its explicitly granted Supervisor Auth API access for that reset.
+    The direct WebSocket fallback remains for non-add-on development installs and
+    clearly requires an owner token there.
+    """
+    if str(os.getenv("SUPERVISOR_TOKEN") or "").strip():
+        _supervisor_request(
+            "POST",
+            "/auth/reset",
+            {"username": username, "password": password},
+            raise_on_error=True,
+        )
+        return
+
+    if not bool(current_user.get("is_owner")):
+        raise PermissionError(
+            "Changing an existing local Hausie user requires a Home Assistant Owner token outside Home Assistant OS."
+        )
+    ha.change_auth_user_password(str(user_id or ""), password)
 
 
 def _validate_ha_credentials(log=None) -> dict[str, Any]:
