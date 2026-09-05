@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.110
+
+- Grant the required Supervisor admin role for setup: Home Assistant reserves
+  password resets for existing local users (`POST /auth/reset`) to add-ons with
+  that role. This fixes the 403 response in version 0.2.109.
+- Remove the unrelated `auth_api` permission; Hausie does not use it.
+
 ## 0.2.109
 
 - Use Home Assistant OS's explicitly granted Auth API to reset existing managed

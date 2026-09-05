@@ -27,14 +27,14 @@ def _headers(**values: str) -> Message:
 
 
 class AddonManifestSecurityTests(unittest.TestCase):
-    def test_manifest_uses_only_the_required_supervisor_permissions(self) -> None:
+    def test_manifest_grants_required_supervisor_permissions(self) -> None:
         manifest_path = Path(__file__).resolve().parents[1] / "hausie" / "config.yaml"
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
 
         self.assertTrue(manifest["ingress"])
-        self.assertEqual(manifest["hassio_role"], "manager")
-        # Required only to reset passwords for the two Hausie-managed local users.
-        self.assertTrue(manifest["auth_api"])
+        # Supervisor reserves /auth/reset for add-ons with the admin role.
+        self.assertEqual(manifest["hassio_role"], "admin")
+        self.assertNotIn("auth_api", manifest)
         self.assertNotIn("ports", manifest)
 
 
