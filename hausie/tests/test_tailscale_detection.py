@@ -1,5 +1,5 @@
 from hausie_addon.core import heartbeat
-from hausie_addon.core.heartbeat import _supervisor_tailscale_ip
+from hausie_addon.core.heartbeat import _supervisor_tailscale_ip, _tailscale_app_log_ip
 
 
 def test_supervisor_network_finds_tailscale_ip_from_interface_map():
@@ -62,3 +62,34 @@ def test_resolver_ignores_manual_tailscale_option(monkeypatch):
     monkeypatch.setattr(heartbeat, "_proc_tailscale_ip", lambda: "")
 
     assert heartbeat._resolve_tailscale_ip() == ("", "missing")
+
+
+def test_tailscale_app_log_finds_forwarded_home_assistant_address():
+    def request(method, path, payload):
+        assert payload is None
+        if path == "/addons":
+            return {
+                "data": {
+                    "addons": [
+                        {"slug": "a0d7b954_tailscale", "name": "Tailscale"},
+                    ]
+                }
+            }
+        assert path == "/addons/a0d7b954_tailscale/logs/latest"
+        return {
+            "data": """
+                endpoints changed: 100.64.108.51:26307 (portmap)
+                Forwarding incoming tailnet connections directed to 100.78.223.19 to the host
+            """
+        }
+
+    assert _tailscale_app_log_ip(request) == ("100.78.223.19", "tailscale-app-log")
+
+
+def test_tailscale_app_log_does_not_select_an_unrelated_100_address():
+    def request(method, path, payload):
+        if path == "/addons":
+            return {"data": {"addons": [{"slug": "a0d7b954_tailscale", "name": "Tailscale"}]}}
+        return {"data": "endpoints changed: 100.64.108.51:26307 (portmap)"}
+
+    assert _tailscale_app_log_ip(request) == ("", "missing")

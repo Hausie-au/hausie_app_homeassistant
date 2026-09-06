@@ -151,6 +151,67 @@ def _supervisor_tailscale_ip(
     return (ip, "supervisor-network") if ip else ("", "missing")
 
 
+def _tailscale_app_log_ip(
+    supervisor_request: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
+) -> tuple[str, str]:
+    """Read the assigned address from the installed Tailscale app's latest log.
+
+    Home Assistant apps run in separate containers.  When the Community
+    Tailscale app owns ``tailscale0``, neither this add-on's network namespace
+    nor the Supervisor host-network endpoint contains its CGNAT address.  The
+    Tailscale app does, however, write the address it forwards to Home
+    Assistant to its startup log.  Reading that Supervisor-provided log keeps
+    discovery automatic without persisting a manually entered IP address.
+    """
+
+    try:
+        addons_response = supervisor_request("GET", "/addons", None)
+    except Exception:
+        return "", "missing"
+
+    body = addons_response.get("data") if isinstance(addons_response, dict) else None
+    addons = body.get("addons") if isinstance(body, dict) else None
+    if not isinstance(addons, list):
+        return "", "missing"
+
+    slug = ""
+    for addon in addons:
+        if not isinstance(addon, dict):
+            continue
+        candidate = str(addon.get("slug") or "").strip()
+        name = str(addon.get("name") or "").strip().lower()
+        if candidate == "a0d7b954_tailscale" or "tailscale" in candidate.lower() or name == "tailscale":
+            slug = candidate
+            break
+    if not slug:
+        return "", "missing"
+
+    try:
+        logs_response = supervisor_request("GET", f"/addons/{slug}/logs/latest", None)
+    except Exception:
+        return "", "missing"
+
+    if isinstance(logs_response, dict):
+        raw = logs_response.get("data", logs_response.get("message", ""))
+    else:
+        raw = logs_response
+    if not isinstance(raw, str):
+        return "", "missing"
+
+    # The Community Tailscale app logs this exact forwarding relationship:
+    # "Forwarding incoming tailnet connections directed to 100.x.y.z ...".
+    # Do not use endpoint or STUN addresses elsewhere in the log.
+    for match in re.finditer(
+        r"Forwarding (?:incoming|local) tailnet connections directed to ((?:\d{1,3}\.){3}\d{1,3})",
+        raw,
+        flags=re.IGNORECASE,
+    ):
+        ip = match.group(1)
+        if _is_tailscale_ipv4(ip):
+            return ip, "tailscale-app-log"
+    return "", "missing"
+
+
 class HeartbeatReporter:
     """Send periodic heartbeat payloads to Hausie Cloud."""
 
@@ -229,6 +290,10 @@ class HeartbeatReporter:
         tailscale_ip, tailscale_ip_source = _resolve_tailscale_ip()
         if not tailscale_ip:
             tailscale_ip, tailscale_ip_source = _supervisor_tailscale_ip(
+                self._supervisor_request
+            )
+        if not tailscale_ip:
+            tailscale_ip, tailscale_ip_source = _tailscale_app_log_ip(
                 self._supervisor_request
             )
         try:

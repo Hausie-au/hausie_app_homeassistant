@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.112
+
+- Discover the Home Assistant Community Tailscale app's forwarded tailnet IP
+  from its Supervisor-provided startup log when its network interface is
+  isolated from the Hausie app. This restores the SSH and HA UI links in
+  Remote Support without requiring a manually configured IP address.
+
 ## 0.2.111
 
 - Preserve Home Assistant credentials and setup state when re-pairing or resetting a Hausie device.
