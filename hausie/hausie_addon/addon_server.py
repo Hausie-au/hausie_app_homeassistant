@@ -58,6 +58,7 @@ from .core.device_state import (
     HAUSIE_ADMIN_USERNAME,
     HAUSIE_SUPPORT_USERNAME,
     migrate_ha_runtime_credentials_from_env,
+    clear_device_credentials,
     persist_ha_runtime_credentials,
     resolve_device_credentials,
     resolve_ha_runtime_credentials,
@@ -938,12 +939,7 @@ def _register_with_pairing_code(pairing_code: str) -> dict[str, str | bool]:
     token = str(response.get("device_token") or "").strip()
     if not device_id or not token:
         raise RuntimeError("Pairing failed: missing device credentials in response.")
-    state_path = resolve_state_path()
-    if state_path.exists():
-        try:
-            state_path.unlink()
-        except Exception:
-            pass
+    clear_device_credentials(path=resolve_state_path())
     persist_device_credentials(device_id, token)
     os.environ["HAUSIE_DEVICE_ID"] = device_id
     os.environ["HAUSIE_CLOUD_TOKEN"] = token
@@ -2038,12 +2034,7 @@ def _handle_heartbeat_actions(actions: list[Any], payload: dict[str, Any] | None
         lower_actions = [str(action.get("type") or "").strip().lower() for action in normalized]
         if "reset_pairing" in lower_actions:
             with log.script("reset_pairing"):
-                state_path = resolve_state_path()
-                if state_path.exists():
-                    try:
-                        state_path.unlink()
-                    except Exception:
-                        pass
+                clear_device_credentials(path=resolve_state_path())
                 os.environ.pop("HAUSIE_DEVICE_ID", None)
                 os.environ.pop("HAUSIE_CLOUD_TOKEN", None)
                 if _HEARTBEAT:

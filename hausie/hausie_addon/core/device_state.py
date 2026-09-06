@@ -73,6 +73,25 @@ def persist_device_credentials(
     save_device_state(data, path)
 
 
+def clear_device_credentials(*, path: Path | None = None) -> None:
+    """Forget only the Cloud pairing, while preserving local HA credentials.
+
+    Re-pairing is a normal recovery operation.  It must not wipe the Home
+    Assistant administrator token or the two local Hausie account settings
+    that were collected during the initial setup.
+    """
+    data = load_device_state(path)
+    for key in (
+        "hausie_device_id",
+        "device_id",
+        "device_token",
+        "hausie_device_token",
+        "bootstrap_setup",
+    ):
+        data.pop(key, None)
+    save_device_state(data, path)
+
+
 def resolve_ha_runtime_credentials() -> Tuple[Optional[str], Optional[str], Optional[str]]:
     token = os.getenv("HA_TOKEN") or _read_secret_file(os.getenv("HA_TOKEN_FILE"))
     username = os.getenv("HA_UI_USERNAME") or None

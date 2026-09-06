@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.111
+
+- Preserve Home Assistant credentials and setup state when re-pairing or resetting a Hausie device.
+
 ## 0.2.110
 
 - Grant the required Supervisor admin role for setup: Home Assistant reserves
