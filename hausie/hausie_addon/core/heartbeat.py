@@ -259,6 +259,12 @@ class HeartbeatReporter:
         )
         if response.status_code // 100 != 2:
             return {}
+        # Supervisor's app-log endpoints intentionally return text/plain rather
+        # than JSON. Preserve that payload in the same small wrapper used by
+        # JSON responses so callers can inspect logs without a second client.
+        content_type = str(response.headers.get("Content-Type") or "").lower()
+        if content_type.startswith("text/"):
+            return {"result": "ok", "data": response.text}
         try:
             data = response.json()
         except Exception:

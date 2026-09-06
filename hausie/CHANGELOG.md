@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.113
+
+- Correctly read Supervisor's text/plain Tailscale app logs so Remote Support
+  can publish the detected tailnet IP and generate the SSH and HA UI links.
+
 ## 0.2.112
 
 - Discover the Home Assistant Community Tailscale app's forwarded tailnet IP
