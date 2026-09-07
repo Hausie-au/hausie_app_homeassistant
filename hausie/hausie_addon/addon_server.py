@@ -1739,7 +1739,7 @@ def _validate_ha_credentials(log=None) -> dict[str, Any]:
     token, _username, support_password = resolve_ha_runtime_credentials()
     valid = False
     error = ""
-    if not token or not support_password or not state.get("hausie_admin_password_configured"):
+    if not token or not support_password:
         error = "Home Assistant administrator token and both Hausie account passwords are required."
     else:
         ha = _resolve_ha_admin_client()
@@ -1756,6 +1756,12 @@ def _validate_ha_credentials(log=None) -> dict[str, Any]:
             missing_users = sorted(required - usernames)
             if missing_users:
                 raise RuntimeError(f"Missing local Hausie user: {', '.join(missing_users)}.")
+            # Older add-on versions could lose only this marker while the two
+            # local Hausie users remained intact.  The users are the durable
+            # source of truth; restore the marker after verifying them so a
+            # restart or a repaired pairing does not ask for passwords again.
+            if not state.get("hausie_admin_password_configured"):
+                state["hausie_admin_password_configured"] = True
             valid = True
         except Exception as exc:
             error = f"Credential verification failed: {exc}"

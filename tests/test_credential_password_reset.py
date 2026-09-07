@@ -14,6 +14,30 @@ from hausie_addon.settings import Settings  # noqa: E402
 
 
 class CredentialPasswordResetTests(unittest.TestCase):
+    def test_validation_repairs_missing_marker_when_users_still_exist(self) -> None:
+        ha = Mock()
+        ha.fetch_users.return_value = [
+            {"username": "hausie_admin", "isAdmin": True},
+            {"username": "hausie_support_user", "isAdmin": True},
+        ]
+        state = {}
+
+        with (
+            patch.object(
+                addon_server,
+                "resolve_ha_runtime_credentials",
+                return_value=("administrator-token", "hausie_support_user", "support-password"),
+            ),
+            patch.object(addon_server, "load_device_state", return_value=state),
+            patch.object(addon_server, "save_device_state") as save_state,
+            patch.object(addon_server, "_resolve_ha_admin_client", return_value=ha),
+        ):
+            result = addon_server._validate_ha_credentials()
+
+        self.assertTrue(result["credentials_valid"])
+        self.assertTrue(state["hausie_admin_password_configured"])
+        save_state.assert_called_once_with(state)
+
     def test_rejected_websocket_command_is_reported(self) -> None:
         class RejectedSocket:
             def send(self, _payload: str) -> None:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.114
+
+- Restore the local credential marker when the existing Hausie administrator
+  and support users are verified, preventing a restart or repaired pairing
+  from incorrectly requesting credentials again.
+
 ## 0.2.113
 
 - Correctly read Supervisor's text/plain Tailscale app logs so Remote Support
