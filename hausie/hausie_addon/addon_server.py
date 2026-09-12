@@ -2402,7 +2402,7 @@ def _cleanup_hausie_assets(
             settings = Settings()
             if settings.HA_UI_USERNAME and settings.HA_UI_PASSWORD:
                 dashboard_path = os.getenv("HA_HAUSIE_DASHBOARD_PATH", "dashboard-hausie/0").strip()
-                base_url = settings.HA_REST_URL.rsplit("/api", 1)[0]
+                base_url = settings.HA_UI_BASE_URL
                 headless_flag = os.getenv("HA_PLAYWRIGHT_HEADLESS", "").strip().lower()
                 headless = headless_flag not in {"0", "false", "no"}
                 autom = DashboardUpdater(
@@ -3249,7 +3249,7 @@ def _run_sync_inventory(
                 else:
                     log.start("Updating dashboard via UI.")
                     autom = DashboardUpdater(
-                        base_url=settings.HA_REST_URL.rsplit("/api", 1)[0],
+                        base_url=settings.HA_UI_BASE_URL,
                         username=settings.HA_UI_USERNAME,
                         password=settings.HA_UI_PASSWORD,
                         headless=True,

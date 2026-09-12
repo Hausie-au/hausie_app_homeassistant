@@ -34,6 +34,13 @@ class Settings:
             self.HA_WS_URL = os.getenv("HA_WS_URL", default_ws)
             self.HA_REST_URL = os.getenv("HA_REST_URL", default_rest)
             self.HA_TOKEN = saved_token
+        # Supervisor's `/core` proxy is an API endpoint, not Home Assistant's
+        # browser UI. Keep a dedicated UI URL for Playwright rather than
+        # deriving one from HA_REST_URL.
+        self.HA_UI_BASE_URL = os.getenv(
+            "HAUSIE_HA_UI_URL",
+            os.getenv("HA_UI_BASE_URL", "http://homeassistant:8123"),
+        ).rstrip("/")
         if not self.HA_TOKEN:
             raise RuntimeError("Home Assistant access is unavailable. Start this as a Home Assistant add-on or configure HA_TOKEN.")
         self.PLAYWRIGHT_STORAGE_STATE = os.getenv("PLAYWRIGHT_STORAGE_STATE")

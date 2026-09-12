@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.117
+
+- Use Home Assistant's browser UI address for Playwright dashboard edits rather
+  than Supervisor's API-only `/core` proxy.
+
 ## 0.2.116
 
 - Wait for Home Assistant's login UI after a restart and authenticate at the

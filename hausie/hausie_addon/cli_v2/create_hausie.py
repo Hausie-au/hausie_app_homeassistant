@@ -188,7 +188,7 @@ def main() -> None:
             else:
                 log.start("Updating dashboard via UI.")
                 autom = DashboardUpdater(
-                    base_url=s.HA_REST_URL.rsplit("/api", 1)[0],
+                    base_url=s.HA_UI_BASE_URL,
                     username=s.HA_UI_USERNAME,
                     password=s.HA_UI_PASSWORD,
                     headless=False,
