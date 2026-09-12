@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.116
+
+- Wait for Home Assistant's login UI after a restart and authenticate at the
+  stable root URL before opening the Hausie dashboard editor.
+- Report an actionable error when the login UI never becomes available instead
+  of silently continuing without a dashboard.
+
 ## 0.2.115
 
 - Show the start, completion, and failure details of background initialization

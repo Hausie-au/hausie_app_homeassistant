@@ -140,23 +140,34 @@ class DashboardUpdater:
                 if self._is_logged_in():
                     self._log.ok("Logged in.")
                     return
-                self._log.warn("Login form not detected or button click failed.")
-                return
+                message = "Home Assistant login did not complete; verify the local Hausie support credentials."
+                self._log.error(message)
+                raise RuntimeError(message)
 
-    def _check_and_login(self):
-        """Log in only if the login form is present."""
+    def _check_and_login(self, timeout_ms: int = 30_000):
+        """Wait for Home Assistant to load, then authenticate the browser session."""
         if self._is_logged_in():
             self._log.info("Already authenticated.")
             return
         try:
-            self.page.wait_for_selector('input#username, input[name="username"]', timeout=3000)
+            self.page.wait_for_selector(
+                'input#username, input[name="username"], input[autocomplete="username"]',
+                state="visible",
+                timeout=timeout_ms,
+            )
             self._log.info("Login form detected, logging in.")
             self._login()
         except TimeoutError:
             if self._is_logged_in():
                 self._log.info("Already authenticated.")
             else:
-                self._log.warn("Login form not detected and session not authenticated.")
+                location = str(getattr(self.page, "url", "") or "unknown URL")
+                message = (
+                    "Home Assistant login did not become available within "
+                    f"{timeout_ms // 1000}s at {location}."
+                )
+                self._log.error(message)
+                raise RuntimeError(message)
 
     # -----------------------
     # Raw editor helpers
@@ -164,6 +175,13 @@ class DashboardUpdater:
     def _open_raw_editor(self, dashboard_path: str):
         """Navigate to the raw dashboard editor view."""
         self._launch_browser()
+        # A Pi may need several seconds after Home Assistant restarts before
+        # the auth component is rendered. Authenticate at the stable root URL
+        # first; navigating directly to a dashboard can otherwise leave the
+        # browser on a loading shell with no detectable login form.
+        self._log.start("Opening Home Assistant for dashboard authentication.")
+        self.page.goto(self.base_url, wait_until="domcontentloaded")
+        self._check_and_login()
         dashboard_edit_url = (
             dashboard_path
             if dashboard_path.startswith("http://") or dashboard_path.startswith("https://")
