@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.115
+
+- Show the start, completion, and failure details of background initialization
+  and dashboard rebuild workflows in the Home Assistant add-on log.
+- Preserve the internal workflow log while making production failures
+  diagnosable without exposing credentials.
+
 ## 0.2.114
 
 - Restore the local credential marker when the existing Hausie administrator

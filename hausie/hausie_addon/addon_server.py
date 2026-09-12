@@ -11,6 +11,7 @@ import signal
 import tempfile
 import threading
 import time
+import traceback
 import hashlib
 import html
 from contextlib import contextmanager
@@ -147,10 +148,13 @@ def _start_background_workflow(action_name: str, runner) -> None:
     log = get_logger("addon")
 
     def _wrapped() -> None:
+        log.start(f"Background action started: {action_name}")
         try:
             runner()
+            log.ok(f"Background action completed: {action_name}")
         except Exception as exc:
             log.error(f"Background action failed: {action_name} ({exc})")
+            log.error(traceback.format_exc().rstrip())
             if action_name == "initialize_hausie":
                 _set_setup_progress("failed", str(exc))
 
@@ -3228,11 +3232,20 @@ def _run_sync_inventory(
                         resolved = dash_file if dash_file.startswith("/") else f"{settings.PI_HA_CONFIG_DIR.rstrip('/')}/{dash_file}"
                         dashboard_yaml = applied.get(resolved)
                         if not dashboard_yaml:
-                            log.warn(f"UI update skipped: dashboard YAML not found in applied artifacts ({resolved}).")
+                            message = f"Dashboard YAML not found in applied artifacts ({resolved})."
+                            log.warn(f"UI update skipped: {message}")
+                            if force_full:
+                                raise RuntimeError(message)
                 if not settings.HA_UI_USERNAME or not settings.HA_UI_PASSWORD:
-                    log.warn("UI update skipped: HA_UI_USERNAME/HA_UI_PASSWORD not set.")
+                    message = "HA_UI_USERNAME/HA_UI_PASSWORD are not configured for the dashboard update."
+                    log.warn(f"UI update skipped: {message}")
+                    if force_full:
+                        raise RuntimeError(message)
                 elif not dashboard_yaml:
-                    log.warn("UI update skipped: dashboard YAML content missing.")
+                    message = "Dashboard YAML content is missing."
+                    log.warn(f"UI update skipped: {message}")
+                    if force_full:
+                        raise RuntimeError(message)
                 else:
                     log.start("Updating dashboard via UI.")
                     autom = DashboardUpdater(
@@ -3246,14 +3259,19 @@ def _run_sync_inventory(
                         autom.write_yaml_to_ui(dashboard_path, dashboard_yaml)
                         log.ok("Dashboard UI updated.")
                     except Exception as exc:
-                        log.warn(f"UI update failed: {exc}")
+                        log.error(f"Dashboard UI update failed: {exc}")
+                        if force_full:
+                            raise RuntimeError(f"Dashboard UI update failed: {exc}") from exc
                     finally:
                         try:
                             autom.close()
                         except Exception:
                             pass
             else:
-                log.warn("UI update skipped: cloud response missing 'ui' payload.")
+                message = "Cloud response is missing the dashboard UI payload."
+                log.warn(f"UI update skipped: {message}")
+                if force_full:
+                    raise RuntimeError(message)
             preserved_helper_values = _reload_services_preserving_helper_values(ha, log)
             _reload_browser_frontends(ha, log)
             _patch_credentials_shortcut(log)

@@ -42,11 +42,10 @@ if [ -z "${HAUSIE_LOCAL_MODE:-}" ]; then
   export HAUSIE_LOCAL_MODE="true"
 fi
 
-# The private dev add-on deliberately exposes the detailed flow log through
-# Supervisor app logs.  Production keeps the same logger file-only behavior.
-case "${HAUSIE_CLOUD_URL:-}" in
-  *dev-api.hausiehome.com*) export HAUSIE_LOG_STDOUT="true" ;;
-esac
+# Operational workflow results must be visible in Home Assistant's add-on log.
+# The logger deliberately excludes credential values; hiding these failures made
+# a failed dashboard initialization impossible to diagnose in production.
+export HAUSIE_LOG_STDOUT="true"
 
 export PI_HA_CONFIG_DIR="${PI_HA_CONFIG_DIR:-/homeassistant}"
 export PI_DASHBOARD_DIR="${PI_DASHBOARD_DIR:-/homeassistant/dashboards}"
