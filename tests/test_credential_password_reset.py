@@ -14,6 +14,29 @@ from hausie_addon.settings import Settings  # noqa: E402
 
 
 class CredentialPasswordResetTests(unittest.TestCase):
+    def test_setup_status_revalidates_persisted_credentials_after_core_boot(self) -> None:
+        not_ready = {
+            "has_token": True,
+            "has_support_password": True,
+            "has_admin_password": True,
+            "credentials_valid": False,
+            "validation_error": "Credential verification failed: Home Assistant is starting.",
+            "setup_required": True,
+        }
+        ready = {**not_ready, "credentials_valid": True, "validation_error": "", "setup_required": False}
+
+        with (
+            patch.object(addon_server, "_ha_credentials_status_payload", side_effect=[not_ready, ready]),
+            patch.object(addon_server, "_validate_ha_credentials") as validate,
+            patch.object(addon_server, "resolve_device_credentials", return_value=(None, None)),
+            patch.object(addon_server, "load_device_state", return_value={}),
+        ):
+            status = addon_server._setup_status_payload()
+
+        validate.assert_called_once_with()
+        self.assertEqual(status["phase"], "pairing")
+        self.assertTrue(status["credentials_valid"])
+
     def test_validation_repairs_missing_marker_when_users_still_exist(self) -> None:
         ha = Mock()
         ha.fetch_users.return_value = [

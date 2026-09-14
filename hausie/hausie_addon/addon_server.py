@@ -1318,6 +1318,19 @@ def _set_setup_progress(status: str, message: str, *, initialized: bool = False)
 
 def _setup_status_payload() -> dict[str, Any]:
     credentials = _ha_credentials_status_payload()
+    # The add-on is allowed to start before Home Assistant Core has completed
+    # its own boot.  In that short window the startup validation can fail even
+    # though the credentials are safely persisted in /data.  Retry validation
+    # when the setup page first checks its state, rather than asking the owner
+    # to type the same credentials again after a power cycle.
+    if (
+        not credentials["credentials_valid"]
+        and credentials["has_token"]
+        and credentials["has_support_password"]
+        and credentials["has_admin_password"]
+    ):
+        _validate_ha_credentials()
+        credentials = _ha_credentials_status_payload()
     device_id, device_token = resolve_device_credentials()
     paired = bool(device_id and device_token)
     state = load_device_state()
