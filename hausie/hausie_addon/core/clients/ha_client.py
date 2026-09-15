@@ -81,8 +81,15 @@ class HAClient:
                 self._upsert_by_key(items, key, item)
 
     @staticmethod
-    def _normalize_users(users: list) -> list[dict]:
-        """Normalize user records from Home Assistant."""
+    def _normalize_users(users: list, persons: dict | None = None) -> list[dict]:
+        """Normalize users and record whether each one is linked to a Person."""
+        person_user_ids = {
+            str(person.get("user_id") or "").strip()
+            for collection in (persons or {}).values()
+            if isinstance(collection, list)
+            for person in collection
+            if isinstance(person, dict) and str(person.get("user_id") or "").strip()
+        }
         normalized = []
         for user in users or []:
             if not isinstance(user, dict):
@@ -114,6 +121,7 @@ class HAClient:
                 "username": username,
                 "isOwner": bool(is_owner),
                 "isAdmin": bool(is_admin),
+                "hasPerson": str(user_id) in person_user_ids,
             })
         return normalized
 
@@ -209,6 +217,7 @@ class HAClient:
         entities = self._send_and_wait(ws, 3, "config/entity_registry/list")
         labels = self._send_and_wait(ws, 4, "config/label_registry/list") or []
         users = self._send_and_wait(ws, 5, "config/auth/list") if include_users else None
+        persons = self._send_and_wait(ws, 6, "person/list") if include_users else None
         button_label_ids = {
             str(label.get("label_id") or label.get("id") or "").strip()
             for label in labels
@@ -227,7 +236,7 @@ class HAClient:
                 triggers = self._send_and_wait(
                     ws,
                     request_id,
-                    "device_automation/trigger",
+                    "device_automation/trigger/list",
                     {"device_id": device_id},
                 )
                 if isinstance(triggers, list):
@@ -252,7 +261,7 @@ class HAClient:
             "device_automation_triggers": device_automation_triggers,
         }
         if include_users:
-            raw_snapshot["users"] = self._normalize_users(users or [])
+            raw_snapshot["users"] = self._normalize_users(users or [], persons if isinstance(persons, dict) else {})
         else:
             try:
                 raw_snapshot["users"] = self._load_raw().get("users", [])

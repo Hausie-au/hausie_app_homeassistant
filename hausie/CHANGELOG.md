@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.120
+
+- Synchronize each Home Assistant user's Person link so Hausie can expose area
+  permissions only for household People, not service or administrator accounts.
+- Query the supported Home Assistant device-automation trigger-list endpoint
+  when building multi-button controls.
+
 ## 0.2.119
 
 - Include Home Assistant device-automation triggers in the inventory sent to
