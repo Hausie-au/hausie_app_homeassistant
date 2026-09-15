@@ -22,9 +22,12 @@ class HAClient:
         self.data_dir = output_dir or Path(__file__).resolve().parents[3] / "hausie" / "homeassistant" / "data"
         self.raw_file = self.data_dir / "raw.json"
         
-    def _send_and_wait(self, ws, request_id: int, message_type: str):
+    def _send_and_wait(self, ws, request_id: int, message_type: str, payload: dict | None = None):
         """Send a websocket request and wait for the matching response."""
-        ws.send(json.dumps({"id": request_id, "type": message_type}))
+        request = {"id": request_id, "type": message_type}
+        if payload:
+            request.update(payload)
+        ws.send(json.dumps(request))
         while True:
             response = ws.recv()
             response_msg = json.loads(response)
@@ -204,7 +207,37 @@ class HAClient:
         areas = self._send_and_wait(ws, 1, "config/area_registry/list")
         devices = self._send_and_wait(ws, 2, "config/device_registry/list")
         entities = self._send_and_wait(ws, 3, "config/entity_registry/list")
-        users = self._send_and_wait(ws, 4, "config/auth/list") if include_users else None
+        labels = self._send_and_wait(ws, 4, "config/label_registry/list") or []
+        users = self._send_and_wait(ws, 5, "config/auth/list") if include_users else None
+        button_label_ids = {
+            str(label.get("label_id") or label.get("id") or "").strip()
+            for label in labels
+            if str(label.get("name") or label.get("label") or "").strip().lower() == "button"
+        }
+        button_device_ids = [
+            str(device.get("id") or "").strip()
+            for device in devices or []
+            if str(device.get("id") or "").strip()
+            and any(str(label_id or "").strip() in button_label_ids for label_id in (device.get("labels") or []))
+        ]
+        device_automation_triggers = {}
+        request_id = 100
+        for device_id in button_device_ids:
+            try:
+                triggers = self._send_and_wait(
+                    ws,
+                    request_id,
+                    "device_automation/trigger",
+                    {"device_id": device_id},
+                )
+                if isinstance(triggers, list):
+                    device_automation_triggers[device_id] = triggers
+            except RuntimeError as exc:
+                # A labelled device can be a non-trigger button (for example,
+                # an identify entity). Keep the inventory sync usable while
+                # recording that Home Assistant did not expose triggers.
+                log.warn(f"Could not load automation triggers for button device {device_id}: {exc}")
+            request_id += 1
         services = self._get_services_via_rest() or []
 
         ws.close()
@@ -215,6 +248,8 @@ class HAClient:
             "devices": devices or [],
             "entities": entities or [],
             "services": services,
+            "labels": self._normalize_labels(labels),
+            "device_automation_triggers": device_automation_triggers,
         }
         if include_users:
             raw_snapshot["users"] = self._normalize_users(users or [])

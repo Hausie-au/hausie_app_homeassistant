@@ -3198,6 +3198,7 @@ def _run_sync_inventory(
                 "devices": raw.get("devices", []),
                 "entities": raw.get("entities", []),
                 "services": raw.get("services", []),
+                "device_automation_triggers": raw.get("device_automation_triggers", {}),
                 "users": raw.get("users", []),
                 "labels": labels,
                 "current_plan": current_plan,

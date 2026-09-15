@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.119
+
+- Include Home Assistant device-automation triggers in the inventory sent to
+  Hausie Cloud so multi-button remotes are configured from their actual
+  button count and supported gestures.
+
 ## 0.2.117
 
 - Use Home Assistant's browser UI address for Playwright dashboard edits rather
