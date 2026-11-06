@@ -1,11 +1,17 @@
-# Hausie Add-ons Repository
+# Hausie Home Assistant App
+
+Home Assistant add-on for Hausie smart-home configuration and local/cloud integration. This repository contains the distributable add-on, installation documentation and versioned release history.
+
+**Start here:** [Installation and usage](hausie/DOCS.md) · [Changelog](hausie/CHANGELOG.md) · [Hausie](https://hausiehome.com)
+
+## Repository and distribution
 
 This repository is the source of truth for the public Home Assistant add-on.
 
 Public repository:
 
 ```text
-https://github.com/Haussie-au/hausie_app_homeassistant
+https://github.com/Hausie-au/hausie_app_homeassistant
 ```
 
 Expected published structure:
@@ -40,7 +46,7 @@ Hausie App
 
 1. Update the add-on code directly in `hausie/`.
 2. Bump `hausie/config.yaml` version.
-3. Commit and push to `Haussie-au/hausie_app_homeassistant`.
+3. Commit and push to `Hausie-au/hausie_app_homeassistant`.
 4. Home Assistant users get the update from `hausie/config.yaml`.
 
 ## Development vs Production
