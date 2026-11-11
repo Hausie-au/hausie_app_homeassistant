@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.121
+
+- Always restore and verify the Remote Support helper after Refresh and after
+  the final Home Assistant restart performed by Repair.
+
 ## 0.2.120
 
 - Synchronize each Home Assistant user's Person link so Hausie can expose area

@@ -3236,6 +3236,16 @@ def _run_sync_inventory(
                 _ha_config_root(),
                 response.get("plan_badge") if isinstance(response, dict) else None,
             )
+            # Refresh must repair this fixed helper even if the cloud response
+            # omitted it or replaced its YAML with an incomplete artifact.
+            if _ensure_remote_support_helper(_ha_config_root()):
+                log.info("Remote Support helper restored before Home Assistant reload.")
+            if settings.PI_CONFIG_PATH:
+                ConfigManager(
+                    pi_sender=None,
+                    config_path=settings.PI_CONFIG_PATH,
+                    require_remote=False,
+                ).sync_config_dashboard()
             ui_payload = response.get("ui") if isinstance(response, dict) else None
             if isinstance(ui_payload, dict):
                 dashboard_yaml = ui_payload.get("main_dashboard_yaml")
@@ -3287,6 +3297,7 @@ def _run_sync_inventory(
                 if force_full:
                     raise RuntimeError(message)
             preserved_helper_values = _reload_services_preserving_helper_values(ha, log)
+            _ensure_remote_support_entity_ready(ha, log)
             _reload_browser_frontends(ha, log)
             _patch_credentials_shortcut(log)
             _patch_add_device_shortcut(log)
@@ -3327,10 +3338,15 @@ def _run_rebuild_hausie() -> None:
             _execute_clean_repair(plan_override=authoritative_plan)
             _update_rebuild_state(state, plan=authoritative_plan, version=current_version)
             _restart_home_assistant(ha, log)
+            _wait_for_home_assistant_ready(ha, log)
             if helper_snapshot:
-                _wait_for_home_assistant_ready(ha, log)
                 _wait_for_helper_entities_ready(ha, helper_snapshot, log)
                 _restore_rebuild_helper_values(ha, helper_snapshot, log)
+            # The final restart happens after the generated assets were
+            # reloaded. Verify the fixed helper again after that restart;
+            # otherwise the dashboard can still point at an unavailable
+            # entity when Repair finishes.
+            _ensure_remote_support_entity_ready(ha, log)
 
 
 def _run_create_base(
@@ -3892,6 +3908,51 @@ def _ensure_remote_support_helper(root: Path) -> bool:
     if updated:
         helper_path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
     return updated
+
+
+def _confirm_remote_support_entity(ha: HAClient, log, *, attempts: int = 15) -> None:
+    """Do not report a successful Refresh while Remote Support is missing."""
+    target = entity_id("input_boolean", CORE_REMOTE_SUPPORT_ENABLED)
+    for attempt in range(max(1, attempts)):
+        try:
+            states = ha.get_states()
+            if any(
+                isinstance(state, dict)
+                and state.get("entity_id") == target
+                and state.get("state") not in {None, "unknown", "unavailable"}
+                for state in states or []
+            ):
+                return
+        except Exception as exc:
+            log.warn(f"Could not verify Remote Support helper: {exc}")
+        if attempt + 1 < attempts:
+            time.sleep(1)
+    raise RuntimeError(
+        f"Refresh did not restore {target}; check configuration.yaml input_boolean include and Home Assistant logs."
+    )
+
+
+def _ensure_remote_support_entity_ready(ha: HAClient, log, *, attempts: int = 15) -> None:
+    """Recover and verify the fixed helper before a workflow is reported done."""
+    try:
+        _confirm_remote_support_entity(ha, log, attempts=attempts)
+        return
+    except RuntimeError as first_error:
+        log.warn(
+            "Remote Support helper is still unavailable; rebuilding its local "
+            f"definition and reloading Home Assistant: {first_error}"
+        )
+
+    _ensure_remote_support_helper(_ha_config_root())
+    config_path = os.getenv("PI_CONFIG_PATH", "/homeassistant/configuration.yaml").strip()
+    if config_path:
+        ConfigManager(
+            pi_sender=None,
+            config_path=config_path,
+            require_remote=False,
+        ).sync_config_dashboard()
+    _reload_services(ha, log)
+    _confirm_remote_support_entity(ha, log, attempts=attempts)
 
 
 def _turn_on_user_helpers(ha: HAClient) -> int:
