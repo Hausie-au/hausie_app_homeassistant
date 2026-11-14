@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.122
+
+- Use the long cloud workflow timeout for base asset generation so Repair can
+  complete while Cloud is rebuilding dashboards and helpers.
+
 ## 0.2.121
 
 - Always restore and verify the Remote Support helper after Refresh and after

@@ -22,7 +22,15 @@ class CloudClient:
         url = f"{self.base_url}/api/addon/base-assets"
         body = dict(payload or {})
         body.setdefault("force_full", True)
-        resp = requests.post(url, headers=self.headers, json=body, timeout=self.timeout_s)
+        # Base generation can include the same dashboard/helper work as a full
+        # Hausie rebuild. Use the long workflow timeout so Repair does not
+        # abort while Cloud is still generating the response.
+        resp = requests.post(
+            url,
+            headers=self.headers,
+            json=body,
+            timeout=self.create_hausie_timeout_s,
+        )
         if resp.status_code // 100 != 2:
             raise RuntimeError(f"Cloud base-assets failed {resp.status_code}: {resp.text}")
         return resp.json() if resp.content else {}
